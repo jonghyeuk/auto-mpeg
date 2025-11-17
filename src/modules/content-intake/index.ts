@@ -1,0 +1,1 @@
+export { ContentIntakeModule } from './ContentIntakeModule';

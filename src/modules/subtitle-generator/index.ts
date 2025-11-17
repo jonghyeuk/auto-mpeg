@@ -1,0 +1,1 @@
+export { SubtitleGeneratorModule } from './SubtitleGeneratorModule';
