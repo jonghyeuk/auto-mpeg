@@ -1,10 +1,10 @@
 """
-모듈 B: LLM 대본 생성기
-슬라이드 텍스트를 구어체 설명 대본으로 변환
+모듈 B: LLM 대본 생성기 (개선 버전)
+슬라이드 텍스트를 구어체 설명 대본으로 변환 (맥락 유지)
 """
 import json
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from anthropic import Anthropic
 import os
 
@@ -22,11 +22,26 @@ class ScriptGenerator:
         self.model = model
         self.client = Anthropic(api_key=self.api_key)
 
-    def create_script_prompt(self, slide: Dict[str, Any], slide_context: str = "") -> str:
+    def create_script_prompt(
+        self,
+        slide: Dict[str, Any],
+        slide_context: str = "",
+        previous_script: Optional[str] = None
+    ) -> str:
         """슬라이드 정보를 기반으로 대본 생성 프롬프트 작성"""
         title = slide.get("title", "")
         body = slide.get("body", "")
         notes = slide.get("notes", "")
+
+        # 이전 대본이 있으면 맥락 포함
+        context_section = ""
+        if previous_script:
+            context_section = f"""
+이전 슬라이드 설명:
+{previous_script}
+
+위 내용과 자연스럽게 연결되도록 작성해주세요. 필요하다면 "앞서 말했듯이", "이어서", "다음으로" 같은 연결어를 사용할 수 있습니다.
+"""
 
         prompt = f"""다음 슬라이드의 내용을 고등학생이나 취준생이 이해할 수 있도록 15~20초 분량의 구어체 설명으로 작성해주세요.
 
@@ -37,6 +52,8 @@ class ScriptGenerator:
 
 {f"발표자 노트: {notes}" if notes else ""}
 
+{context_section}
+
 {f"전체 맥락: {slide_context}" if slide_context else ""}
 
 요구사항:
@@ -45,6 +62,7 @@ class ScriptGenerator:
 3. 15~20초 안에 읽을 수 있는 분량
 4. 핵심 개념을 명확하게 설명
 5. 예시나 비유를 활용하여 이해하기 쉽게 설명
+6. 이전 슬라이드와의 맥락을 고려하여 자연스러운 흐름 유지
 
 설명 대본만 출력해주세요. 다른 부가 설명은 필요 없습니다."""
 
@@ -82,7 +100,7 @@ class ScriptGenerator:
         context: str = ""
     ) -> List[Dict[str, Any]]:
         """
-        모든 슬라이드에 대한 설명 대본 생성
+        모든 슬라이드에 대한 설명 대본 생성 (맥락 유지)
 
         Args:
             slides_json_path: 슬라이드 정보 JSON 파일 경로
@@ -97,14 +115,36 @@ class ScriptGenerator:
             slides = json.load(f)
 
         scripts_data = []
+        previous_script = None
 
         print(f"대본 생성 시작: {len(slides)}개 슬라이드")
 
         for slide in slides:
             print(f"  슬라이드 {slide['index']}: {slide.get('title', '제목 없음')}")
 
+            # 프롬프트 생성 (이전 대본 포함)
+            prompt = self.create_script_prompt(slide, context, previous_script)
+
             # 대본 생성
-            script = self.generate_script(slide, context)
+            try:
+                message = self.client.messages.create(
+                    model=self.model,
+                    max_tokens=1024,
+                    temperature=0.7,
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": prompt
+                        }
+                    ]
+                )
+
+                script = message.content[0].text.strip()
+
+            except Exception as e:
+                print(f"✗ LLM 대본 생성 실패 (슬라이드 {slide.get('index')}): {e}")
+                # 폴백: 슬라이드 텍스트를 그대로 사용
+                script = f"{slide.get('title', '')}. {slide.get('body', '')}"
 
             script_info = {
                 "index": slide["index"],
@@ -112,6 +152,9 @@ class ScriptGenerator:
             }
 
             scripts_data.append(script_info)
+
+            # 다음 슬라이드를 위해 현재 대본 저장
+            previous_script = script
 
         # JSON 저장
         output_json_path.parent.mkdir(parents=True, exist_ok=True)

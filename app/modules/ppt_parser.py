@@ -1,12 +1,13 @@
 """
-모듈 A: PPT 파서
-PPT 파일에서 슬라이드 텍스트, 이미지 정보를 추출하여 JSON으로 변환
+모듈 A: PPT 파서 (개선 버전)
+PPT 파일에서 슬라이드 텍스트, 이미지, 좌표 정보를 추출하여 JSON으로 변환
 """
 import json
 from pathlib import Path
 from typing import List, Dict, Any
 from pptx import Presentation
-from pptx.util import Inches
+from pptx.util import Inches, Emu
+from pptx.enum.shapes import MSO_SHAPE_TYPE
 import io
 from PIL import Image
 
@@ -14,22 +15,99 @@ from PIL import Image
 class PPTParser:
     """PPT 파일을 파싱하여 슬라이드 정보를 추출하는 클래스"""
 
-    def __init__(self, ppt_path: str):
+    def __init__(self, ppt_path: str, slide_width: int = 1920, slide_height: int = 1080):
         """
         Args:
             ppt_path: PPT 파일 경로
+            slide_width: 슬라이드 너비 (픽셀)
+            slide_height: 슬라이드 높이 (픽셀)
         """
         self.ppt_path = Path(ppt_path)
         self.presentation = Presentation(str(self.ppt_path))
+        self.slide_width = slide_width
+        self.slide_height = slide_height
 
-    def extract_text_from_shape(self, shape) -> str:
-        """슬라이드 Shape에서 텍스트 추출"""
-        if hasattr(shape, "text"):
-            return shape.text.strip()
-        return ""
+        # PPT의 실제 크기 (EMU 단위)
+        self.ppt_width = self.presentation.slide_width
+        self.ppt_height = self.presentation.slide_height
+
+    def emu_to_pixels(self, emu_value: int, dimension: str = "width") -> int:
+        """
+        EMU(English Metric Units)를 픽셀로 변환
+
+        Args:
+            emu_value: EMU 값
+            dimension: "width" 또는 "height"
+
+        Returns:
+            픽셀 값
+        """
+        if dimension == "width":
+            return int((emu_value / self.ppt_width) * self.slide_width)
+        else:
+            return int((emu_value / self.ppt_height) * self.slide_height)
+
+    def get_shape_type(self, shape) -> str:
+        """Shape 타입 판별"""
+        if shape.shape_type == MSO_SHAPE_TYPE.TEXT_BOX:
+            return "textbox"
+        elif shape.shape_type == MSO_SHAPE_TYPE.PICTURE:
+            return "picture"
+        elif shape.shape_type == MSO_SHAPE_TYPE.PLACEHOLDER:
+            # Placeholder는 title, body 등으로 세분화
+            if hasattr(shape, "placeholder_format"):
+                ph_type = shape.placeholder_format.type
+                if ph_type == 1:  # Title
+                    return "title"
+                elif ph_type in [2, 7]:  # Body, Object
+                    return "body"
+            return "placeholder"
+        elif shape.shape_type == MSO_SHAPE_TYPE.GROUP:
+            return "group"
+        elif shape.shape_type == MSO_SHAPE_TYPE.AUTO_SHAPE:
+            return "shape"
+        else:
+            return "other"
+
+    def extract_slide_elements(self, slide) -> List[Dict[str, Any]]:
+        """
+        슬라이드에서 모든 요소(텍스트, 이미지 등)의 좌표 정보 추출
+
+        Returns:
+            요소 정보 리스트 (type, text, box)
+        """
+        elements = []
+
+        for shape in slide.shapes:
+            # 좌표 정보 추출 (EMU → 픽셀)
+            x = self.emu_to_pixels(shape.left, "width")
+            y = self.emu_to_pixels(shape.top, "height")
+            w = self.emu_to_pixels(shape.width, "width")
+            h = self.emu_to_pixels(shape.height, "height")
+
+            # Shape 타입 판별
+            shape_type = self.get_shape_type(shape)
+
+            # 텍스트 추출
+            text = ""
+            if hasattr(shape, "text"):
+                text = shape.text.strip()
+
+            # 텍스트가 있는 요소만 추가
+            if text:
+                element = {
+                    "type": shape_type,
+                    "text": text,
+                    "box": [x, y, w, h]  # [x, y, width, height]
+                }
+                elements.append(element)
+
+        return elements
 
     def extract_slide_text(self, slide) -> Dict[str, str]:
-        """슬라이드에서 제목, 본문, 노트 텍스트 추출"""
+        """
+        슬라이드에서 제목, 본문, 노트 텍스트 추출 (하위 호환성 유지)
+        """
         title = ""
         body_parts = []
 
@@ -38,8 +116,8 @@ class PPTParser:
             if hasattr(shape, "text"):
                 text = shape.text.strip()
                 if text:
-                    # 첫 번째 큰 텍스트를 제목으로 간주
-                    if not title and len(text) < 100:
+                    shape_type = self.get_shape_type(shape)
+                    if shape_type == "title":
                         title = text
                     else:
                         body_parts.append(text)
@@ -84,8 +162,11 @@ class PPTParser:
         slides_data = []
 
         for idx, slide in enumerate(self.presentation.slides, start=1):
-            # 텍스트 정보 추출
+            # 텍스트 정보 추출 (하위 호환성)
             text_data = self.extract_slide_text(slide)
+
+            # 요소 정보 추출 (좌표 포함) - 개선 버전
+            elements = self.extract_slide_elements(slide)
 
             # 이미지 파일명
             img_filename = f"slide_{idx:03d}.png"
@@ -96,13 +177,11 @@ class PPTParser:
                 "title": text_data["title"],
                 "body": text_data["body"],
                 "notes": text_data["notes"],
-                "image": str(img_path.relative_to(output_json_path.parent.parent))
+                "image": str(img_path.relative_to(output_json_path.parent.parent)),
+                "elements": elements  # 좌표 정보 포함
             }
 
             slides_data.append(slide_info)
-
-            # 슬라이드 이미지 저장 (실제 구현 필요)
-            # self.save_slide_as_image(idx, img_path)
 
         # JSON 저장
         output_json_path.parent.mkdir(parents=True, exist_ok=True)
@@ -112,6 +191,10 @@ class PPTParser:
         print(f"✓ PPT 파싱 완료: {len(slides_data)}개 슬라이드")
         print(f"  - JSON: {output_json_path}")
         print(f"  - 이미지: {output_img_dir}")
+
+        # 요소 통계 출력
+        total_elements = sum(len(s["elements"]) for s in slides_data)
+        print(f"  - 추출된 요소: {total_elements}개")
 
         return slides_data
 

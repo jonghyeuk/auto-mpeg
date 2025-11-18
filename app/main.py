@@ -54,6 +54,7 @@ class PPTToVideoPipeline:
         slides_json = config.META_DIR / "slides.json"
         scripts_json = config.META_DIR / "scripts.json"
         audio_meta_json = config.META_DIR / "audio_meta.json"
+        timestamps_json = config.META_DIR / "timestamps.json"
         overlay_plan_json = config.META_DIR / "overlay_plan.json"
         final_video = config.OUTPUT_DIR / f"{output_name}.mp4"
 
@@ -90,7 +91,8 @@ class PPTToVideoPipeline:
             audio_meta = tts.generate_audio(
                 scripts_json,
                 config.AUDIO_DIR,
-                audio_meta_json
+                audio_meta_json,
+                timestamps_json
             )
 
             # ===== 4단계: 강조 플랜 생성 (선택) =====

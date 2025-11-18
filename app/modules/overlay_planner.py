@@ -1,6 +1,6 @@
 """
-모듈 D: 강조 플랜 생성기
-슬라이드 내용에 따라 강조 애니메이션 계획 수립
+모듈 D: 강조 플랜 생성기 (개선 버전)
+슬라이드 좌표와 타임스탬프를 기반으로 강조 애니메이션 계획 수립
 """
 import json
 from pathlib import Path
@@ -10,7 +10,7 @@ import os
 
 
 class OverlayPlanner:
-    """LLM을 사용하여 슬라이드별 강조 애니메이션 계획을 생성하는 클래스"""
+    """LLM과 좌표/타임스탬프를 사용하여 슬라이드별 강조 애니메이션 계획을 생성하는 클래스"""
 
     def __init__(self, api_key: str = None, model: str = "claude-3-5-sonnet-20241022"):
         """
@@ -26,53 +26,70 @@ class OverlayPlanner:
         self,
         slide: Dict[str, Any],
         script: str,
+        timestamps: List[Dict[str, Any]],
         duration: float
     ) -> str:
-        """강조 애니메이션 계획 생성 프롬프트 작성"""
+        """강조 애니메이션 계획 생성 프롬프트 작성 (좌표 및 타임스탬프 기반)"""
         title = slide.get("title", "")
-        body = slide.get("body", "")
+        elements = slide.get("elements", [])
+
+        # 슬라이드 요소 정보 포맷팅
+        elements_text = ""
+        for i, elem in enumerate(elements, 1):
+            elements_text += f"{i}. {elem['type']}: \"{elem['text']}\" at {elem['box']}\n"
+
+        # 타임스탬프 정보 포맷팅
+        timestamps_text = ""
+        for ts in timestamps[:10]:  # 처음 10개만 표시
+            timestamps_text += f"  \"{ts['word']}\" ({ts['start']:.1f}s ~ {ts['end']:.1f}s)\n"
 
         prompt = f"""다음 슬라이드에 대한 강조 애니메이션 계획을 JSON 형식으로 작성해주세요.
 
 슬라이드 제목: {title}
-슬라이드 본문: {body}
 설명 대본: {script}
 영상 길이: {duration}초
+
+슬라이드 요소 (좌표 정보):
+{elements_text}
+
+단어별 타임스탬프 (일부):
+{timestamps_text}
 
 애니메이션 타입:
 1. highlight_box: 특정 영역을 박스로 강조
 2. floating_text: 떠다니는 텍스트 레이블
 3. arrow: 화살표로 특정 부분 지시
-4. pulse_circle: 원형 펄스 효과
-5. underline: 텍스트 밑줄 강조
 
-각 애니메이션은 다음 정보를 포함해야 합니다:
-- type: 애니메이션 타입
-- x, y: 위치 (0~1920, 0~1080)
-- width, height: 크기 (박스의 경우)
-- start: 시작 시간 (초)
-- end: 종료 시간 (초)
-- text: 표시할 텍스트 (선택)
-- color: 색상 (선택, 기본: yellow)
+작업 절차:
+1. 대본에서 강조할 핵심 키워드 2~3개 선택
+2. 각 키워드에 대해:
+   - 슬라이드 요소에서 해당 키워드와 가장 관련 있는 요소의 좌표(box) 찾기
+   - 타임스탬프에서 해당 키워드가 발음되는 시간(start, end) 찾기
+3. JSON 형식으로 출력
 
-JSON 형식으로만 응답해주세요:
+JSON 형식:
 {{
   "overlays": [
     {{
       "type": "highlight_box",
-      "x": 200,
-      "y": 150,
-      "width": 300,
-      "height": 120,
-      "start": 1.0,
-      "end": 5.0,
-      "text": "강조할 내용",
+      "x": <요소의 x>,
+      "y": <요소의 y>,
+      "width": <요소의 width>,
+      "height": <요소의 height>,
+      "start": <타임스탬프 start>,
+      "end": <타임스탬프 end>,
+      "text": "키워드",
       "color": "yellow"
     }}
   ]
 }}
 
-슬라이드 내용과 대본을 분석하여 2~3개의 적절한 강조 애니메이션을 제안해주세요."""
+주의사항:
+- 좌표는 슬라이드 요소의 box 값 사용
+- 시간은 타임스탬프의 start/end 값 사용
+- 최소 1개, 최대 3개의 애니메이션
+
+JSON만 출력하세요."""
 
         return prompt
 
@@ -80,10 +97,11 @@ JSON 형식으로만 응답해주세요:
         self,
         slide: Dict[str, Any],
         script: str,
+        timestamps: List[Dict[str, Any]],
         duration: float
     ) -> List[Dict[str, Any]]:
         """단일 슬라이드에 대한 강조 계획 생성"""
-        prompt = self.create_overlay_prompt(slide, script, duration)
+        prompt = self.create_overlay_prompt(slide, script, timestamps, duration)
 
         try:
             message = self.client.messages.create(
@@ -151,11 +169,12 @@ JSON 형식으로만 응답해주세요:
             index = slide["index"]
             script = scripts[i]["script"]
             duration = audio_meta[i]["duration"]
+            timestamps = audio_meta[i].get("timestamps", [])
 
             print(f"  슬라이드 {index}: 강조 플랜 생성 중...")
 
             # 강조 계획 생성
-            overlays = self.generate_overlay_plan(slide, script, duration)
+            overlays = self.generate_overlay_plan(slide, script, timestamps, duration)
 
             plan_info = {
                 "index": index,

@@ -1,6 +1,6 @@
 """
-모듈 C: TTS 클라이언트
-텍스트를 음성으로 변환
+모듈 C: TTS 클라이언트 (개선 버전)
+텍스트를 음성으로 변환하고 단어별 타임스탬프 생성
 """
 import json
 from pathlib import Path
@@ -102,19 +102,89 @@ class TTSClient:
             # 폴백: 대략적인 길이 추정 (150 words/min)
             return 10.0
 
+    def generate_timestamps(self, audio_path: Path, text: str) -> List[Dict[str, Any]]:
+        """
+        Whisper API를 사용하여 오디오에서 단어별 타임스탬프 생성
+
+        Args:
+            audio_path: 오디오 파일 경로
+            text: 원본 텍스트 (참조용)
+
+        Returns:
+            타임스탬프 리스트 [{"word": "단어", "start": 0.0, "end": 1.0}, ...]
+        """
+        try:
+            # Whisper API 호출 (타임스탬프 포함)
+            with open(audio_path, 'rb') as audio_file:
+                transcription = self.client.audio.transcriptions.create(
+                    model="whisper-1",
+                    file=audio_file,
+                    response_format="verbose_json",
+                    timestamp_granularities=["word"]
+                )
+
+            # 타임스탬프 추출
+            timestamps = []
+            if hasattr(transcription, 'words'):
+                for word_info in transcription.words:
+                    timestamps.append({
+                        "word": word_info.word,
+                        "start": word_info.start,
+                        "end": word_info.end
+                    })
+
+            return timestamps
+
+        except Exception as e:
+            print(f"⚠ 타임스탬프 생성 실패: {e}")
+            # 폴백: 간단한 추정 방식
+            return self._estimate_timestamps(text, self.get_audio_duration(audio_path))
+
+    def _estimate_timestamps(self, text: str, total_duration: float) -> List[Dict[str, Any]]:
+        """
+        단어 수 기반 타임스탬프 추정 (폴백)
+
+        Args:
+            text: 텍스트
+            total_duration: 총 오디오 길이
+
+        Returns:
+            추정된 타임스탬프 리스트
+        """
+        words = text.split()
+        if not words:
+            return []
+
+        timestamps = []
+        time_per_word = total_duration / len(words)
+
+        for i, word in enumerate(words):
+            start = i * time_per_word
+            end = (i + 1) * time_per_word
+
+            timestamps.append({
+                "word": word,
+                "start": round(start, 2),
+                "end": round(end, 2)
+            })
+
+        return timestamps
+
     def generate_audio(
         self,
         scripts_json_path: Path,
         output_audio_dir: Path,
-        output_meta_path: Path
+        output_meta_path: Path,
+        output_timestamps_path: Path = None
     ) -> List[Dict[str, Any]]:
         """
-        모든 대본에 대한 오디오 파일 생성
+        모든 대본에 대한 오디오 파일 및 타임스탬프 생성
 
         Args:
             scripts_json_path: 대본 JSON 파일 경로
             output_audio_dir: 출력 오디오 디렉토리
             output_meta_path: 오디오 메타데이터 JSON 파일 경로
+            output_timestamps_path: 타임스탬프 JSON 파일 경로 (선택)
 
         Returns:
             오디오 메타데이터 리스트
@@ -126,6 +196,7 @@ class TTSClient:
         output_audio_dir.mkdir(parents=True, exist_ok=True)
 
         audio_meta = []
+        all_timestamps = []
 
         print(f"TTS 생성 시작: {len(scripts)}개 대본")
 
@@ -146,15 +217,24 @@ class TTSClient:
                 else:
                     raise NotImplementedError(f"{self.provider} TTS는 아직 구현되지 않았습니다")
 
+                # 타임스탬프 생성
+                print(f"    타임스탬프 생성 중...")
+                timestamps = self.generate_timestamps(audio_path, text)
+
                 audio_info = {
                     "index": index,
                     "audio": str(audio_path.relative_to(output_meta_path.parent.parent)),
-                    "duration": round(duration, 2)
+                    "duration": round(duration, 2),
+                    "timestamps": timestamps
                 }
 
                 audio_meta.append(audio_info)
+                all_timestamps.append({
+                    "index": index,
+                    "timestamps": timestamps
+                })
 
-                print(f"    ✓ 완료 ({duration:.1f}초)")
+                print(f"    ✓ 완료 ({duration:.1f}초, {len(timestamps)}개 단어)")
 
             except Exception as e:
                 print(f"    ✗ 실패: {e}")
@@ -163,6 +243,7 @@ class TTSClient:
                     "index": index,
                     "audio": str(audio_path),
                     "duration": 10.0,
+                    "timestamps": [],
                     "error": str(e)
                 })
 
@@ -170,6 +251,12 @@ class TTSClient:
         output_meta_path.parent.mkdir(parents=True, exist_ok=True)
         with open(output_meta_path, 'w', encoding='utf-8') as f:
             json.dump(audio_meta, f, ensure_ascii=False, indent=2)
+
+        # 타임스탬프 JSON 저장 (별도 파일)
+        if output_timestamps_path:
+            with open(output_timestamps_path, 'w', encoding='utf-8') as f:
+                json.dump(all_timestamps, f, ensure_ascii=False, indent=2)
+            print(f"✓ 타임스탬프 저장: {output_timestamps_path}")
 
         print(f"✓ TTS 생성 완료: {output_meta_path}")
 
