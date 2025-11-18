@@ -1,0 +1,19 @@
+# Python 의존성 패키지
+
+# PPT 파싱
+python-pptx>=0.6.21
+
+# LLM
+anthropic>=0.34.0
+
+# TTS
+openai>=1.0.0
+
+# 이미지 처리
+Pillow>=10.0.0
+
+# 환경 변수 관리
+python-dotenv>=1.0.0
+
+# 유틸리티
+requests>=2.31.0

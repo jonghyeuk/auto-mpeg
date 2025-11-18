@@ -1,298 +1,258 @@
-# 🎬 Auto Youdam Blog - AI 자동 영상 생성 오케스트레이터
+# PPT to Video Pipeline
 
-블로그 글(URL 또는 텍스트)을 입력하면 자동으로 **내레이션, 자막, 배경 비주얼**이 포함된 완성된 영상 파일을 생성하는 AI 기반 자동화 엔진입니다.
+PPT 파일을 AI 음성 설명이 포함된 교육 영상으로 자동 변환하는 파이프라인
 
-## 🎯 주요 기능
+## 프로젝트 목표
 
-- **블로그 콘텐츠 자동 추출**: URL 또는 텍스트를 입력하면 자동으로 본문 추출 및 정제
-- **AI 기반 콘텐츠 분석**: 글의 유형, 톤, 핵심 메시지, 키워드 자동 분석
-- **영상 구조 자동 기획**: LLM을 활용한 영상 구조(훅-본론-결론) 자동 설계
-- **구어체 스크립트 생성**: 블로그 글을 자연스러운 영상 대본으로 자동 변환
-- **자동 TTS 변환**: 스크립트를 음성 파일로 변환하고 정확한 타임스탬프 생성
-- **자막 자동 생성**: SRT/VTT 형식의 자막 파일 자동 생성
-- **영상 자동 합성**: 음성, 배경 비주얼, 자막을 합쳐서 최종 영상 렌더링
-- **썸네일 자동 생성**: 제목과 키워드 기반 썸네일 이미지 생성
-- **AI 품질 검토**: 원본과 스크립트 간의 사실관계 왜곡 여부 자동 검증
+- **입력**: 감마(Gamma) 등으로 만든 PPT 파일 (.pptx)
+- **출력**: 슬라이드별 설명이 붙은 교육 영상 (mp4)
 
-## 📦 최종 산출물
+## 핵심 아이디어
 
-작업 완료 시 다음 파일들이 생성됩니다:
+- 정적인 도식/슬라이드는 사람이(PPT) 만든다
+- 대본, TTS, 강조 애니, 영상 조립은 AI + 스크립트가 자동으로 처리한다
+- n8n/Make 같은 실행량 과금형 오케스트레이터는 사용하지 않는다
 
-```
-outputs/{job_id}/
-├── final_video.mp4           # 자막이 번인된 최종 영상
-├── final_video_clean.mp4     # 자막 없는 버전 (선택)
-├── video_subtitles.srt       # 외부 자막 파일
-├── audio_master.wav          # 전체 내레이션 음성
-├── script.json               # 타임스탬프 포함 스크립트
-├── thumbnail_base.png        # 썸네일 이미지
-└── metadata.json             # 메타데이터
-```
+## 기술 스택
 
-## 🏗️ 시스템 아키텍처
+- **LLM**: Claude (Anthropic) - 텍스트 대본 생성
+- **TTS**: OpenAI TTS - 음성 합성
+- **비디오 엔진**: FFmpeg - 영상 조립
+- **슬라이드 파싱**: python-pptx
+- **백엔드**: Python 3.8+
 
-### 9개 핵심 모듈
-
-1. **콘텐츠 인입 모듈** (`ContentIntakeModule`)
-   - URL/텍스트 입력 처리 및 정제
-
-2. **콘텐츠 분석기** (`ContentAnalyzerModule`)
-   - 글 유형, 톤, 구조, 키워드 분석
-
-3. **LLM 플래너** (`PlannerModule`)
-   - 영상 구조 기획 (훅-본론-결론)
-
-4. **스크립트 생성기** (`ScriptGeneratorModule`)
-   - 구어체 대본 생성
-
-5. **TTS 모듈** (`TTSModule`)
-   - 음성 합성 및 타임스탬프 생성
-
-6. **자막 생성기** (`SubtitleGeneratorModule`)
-   - SRT/VTT 자막 파일 생성
-
-7. **영상 합성 모듈** (`VideoComposerModule`)
-   - FFmpeg 기반 영상 렌더링
-
-8. **썸네일 생성 모듈** (`ThumbnailGeneratorModule`)
-   - AI 이미지 생성 또는 템플릿 기반 썸네일
-
-9. **품질 검토 모듈** (`QualityReviewModule`)
-   - LLM 기반 품질 검증
-
-### 실행 흐름
+## 아키텍처
 
 ```
-입력 → 정제 → 분석 → 기획 → 작성 → 검토 → 녹음 → 자막 → 편집 → 썸네일 → 패키징 → 완료
+PPT 입력
+   ↓
+[모듈 A] PPT 파서 (python-pptx)
+   ↓
+슬라이드 메타데이터 JSON
+   ↓
+[모듈 B] LLM 대본 생성
+   ↓
+슬라이드별 설명 스크립트 JSON
+   ↓
+[모듈 C] TTS 생성
+   ↓
+슬라이드별 오디오 파일
+   ↓
+[모듈 F] FFmpeg 영상 조립
+   ↓
+최종 mp4
 ```
 
-## 🚀 빠른 시작
+## 설치
 
-### 1. 사전 요구사항
+### 1. 시스템 요구사항
 
-- Node.js 18 이상
-- FFmpeg (영상 합성용)
-- API Keys:
-  - Anthropic API Key (Claude)
-  - OpenAI API Key (GPT, TTS)
-  - ElevenLabs API Key (선택, TTS용)
+- Python 3.8 이상
+- FFmpeg
+- LibreOffice (PPTX → PNG 변환용)
 
-### 2. 설치
+#### Linux/Mac
 
 ```bash
-# 저장소 클론
-git clone https://github.com/your-username/auto-youdam-blog.git
-cd auto-youdam-blog
+# Ubuntu/Debian
+sudo apt-get update
+sudo apt-get install -y ffmpeg libreoffice
 
-# 의존성 설치
-npm install
+# Mac (Homebrew)
+brew install ffmpeg libreoffice
+```
 
-# 환경 변수 설정
-cp .env.example .env
-# .env 파일을 열어서 API 키 입력
+#### Windows
+
+- [FFmpeg 다운로드](https://ffmpeg.org/download.html)
+- [LibreOffice 다운로드](https://www.libreoffice.org/download/download/)
+
+### 2. Python 패키지 설치
+
+```bash
+pip install -r requirements.txt
 ```
 
 ### 3. 환경 변수 설정
 
-`.env` 파일을 편집하여 필요한 API 키를 입력하세요:
+`.env.example`을 `.env`로 복사하고 API 키를 입력:
 
-```env
+```bash
+cp .env.example .env
+```
+
+`.env` 파일 편집:
+
+```
 ANTHROPIC_API_KEY=your_anthropic_api_key_here
 OPENAI_API_KEY=your_openai_api_key_here
+TTS_PROVIDER=openai
+TTS_VOICE=alloy
 ```
 
-### 4. 실행
+## 사용법
 
-#### URL에서 영상 생성
+### 기본 사용
 
 ```bash
-npm run dev "https://blog.example.com/post" --type url
+python app/main.py input.pptx
 ```
 
-#### 텍스트에서 영상 생성
+### 출력 파일명 지정
 
 ```bash
-npm run dev "블로그 내용..." --type text
+python app/main.py input.pptx --output my_video
 ```
 
-#### 옵션 사용
+### 디버그 모드
 
 ```bash
-# 목표 영상 길이 지정 (120초)
-npm run dev "https://blog.example.com/post" --target-length 120
-
-# 품질 검토 건너뛰기
-npm run dev "https://blog.example.com/post" --no-quality-check
+python app/main.py input.pptx --debug
 ```
 
-## 📝 사용법
+## 프로젝트 구조
 
-### CLI 사용
+```
+project_root/
+├── app/
+│   ├── main.py                 # CLI 엔트리포인트
+│   ├── config.py               # 설정 관리
+│   └── modules/
+│       ├── ppt_parser.py       # 모듈 A: PPT 파서
+│       ├── script_generator.py # 모듈 B: LLM 대본 생성
+│       ├── tts_client.py       # 모듈 C: TTS 클라이언트
+│       ├── overlay_planner.py  # 모듈 D: 강조 플랜 생성
+│       └── ffmpeg_renderer.py  # 모듈 F: FFmpeg 렌더러
+├── data/
+│   ├── input/                  # 입력 PPT 파일
+│   ├── temp/                   # 임시 파일
+│   │   ├── slides_img/         # 슬라이드 이미지
+│   │   ├── audio/              # TTS 오디오
+│   │   ├── overlay/            # 오버레이 영상
+│   │   └── clips/              # 슬라이드별 클립
+│   ├── output/                 # 최종 영상 출력
+│   └── meta/                   # 메타데이터 JSON
+├── requirements.txt
+├── .env.example
+└── README.md
+```
+
+## 개발 단계
+
+### 1단계 - MVP (현재 구현됨)
+
+- [x] 모듈 A: PPT → slides.json + 슬라이드 이미지
+- [x] 모듈 B: slides.json → scripts.json (AI 대본)
+- [x] 모듈 C: scripts.json → TTS 오디오
+- [x] 모듈 F: 슬라이드 이미지 + 오디오 → 영상
+
+**결과**: 감마 PPT만 넣으면 "말하는 슬라이드 영상"이 자동 생성
+
+### 2단계 - 강조 애니메이션 (예정)
+
+- [ ] 모듈 D: overlay_plan.json 생성 (LLM)
+- [ ] React 애니메이션 오버레이 렌더링
+- [ ] FFmpeg 합성 (베이스 + 오버레이)
+
+**결과**: 슬라이드 위에 강조 애니가 붙은 진짜 '교육 영상'
+
+### 3단계 - 자동화 (예정)
+
+- [ ] 유튜브 자동 업로드
+- [ ] 웹 UI
+- [ ] 배치 처리
+
+## 모듈 설명
+
+### 모듈 A: PPT 파서 (`ppt_parser.py`)
+
+- PPT 파일에서 슬라이드별 텍스트(제목, 본문, 노트) 추출
+- LibreOffice를 사용하여 슬라이드를 PNG 이미지로 변환
+- `slides.json` 생성
+
+### 모듈 B: LLM 대본 생성기 (`script_generator.py`)
+
+- Claude API를 사용하여 슬라이드 내용을 구어체 설명으로 변환
+- 고등학생/취준생이 이해할 수 있는 수준으로 작성
+- 15~20초 분량의 2~3문장으로 구성
+- `scripts.json` 생성
+
+### 모듈 C: TTS 클라이언트 (`tts_client.py`)
+
+- OpenAI TTS API를 사용하여 대본을 음성으로 변환
+- 슬라이드별 오디오 파일 생성 (MP3)
+- FFprobe를 사용하여 오디오 길이 측정
+- `audio_meta.json` 생성
+
+### 모듈 D: 강조 플랜 생성기 (`overlay_planner.py`)
+
+- LLM을 사용하여 슬라이드별 강조 애니메이션 계획 수립
+- 강조 박스, 화살표, 떠다니는 텍스트 등
+- `overlay_plan.json` 생성 (2단계에서 활용)
+
+### 모듈 F: FFmpeg 렌더러 (`ffmpeg_renderer.py`)
+
+- 슬라이드 이미지 + 오디오를 영상 클립으로 조립
+- 모든 클립을 하나의 영상으로 연결
+- 최종 MP4 파일 생성
+
+## 예제 워크플로우
 
 ```bash
-npm run dev <URL 또는 텍스트> [옵션]
+# 1. PPT 파일 준비
+cp presentation.pptx data/input/
 
-옵션:
-  --type <url|text>           입력 타입 (기본값: url)
-  --target-length <초>        목표 영상 길이 (선택)
-  --no-quality-check          품질 검토 건너뛰기
+# 2. 파이프라인 실행
+python app/main.py data/input/presentation.pptx --output lecture_video
+
+# 3. 결과 확인
+# data/output/lecture_video.mp4
 ```
 
-### 라이브러리로 사용
+## 트러블슈팅
 
-```typescript
-import { VideoOrchestrator } from './src/orchestrator';
+### LibreOffice 변환 실패
 
-const orchestrator = new VideoOrchestrator({
-  outputDir: 'outputs',
-  qualityCheckEnabled: true,
-  targetVideoLength: 120,
-});
-
-const result = await orchestrator.execute({
-  source: 'https://blog.example.com/post',
-  sourceType: 'url',
-});
-
-console.log('생성된 영상:', result.paths.video);
-```
-
-## ⚙️ 설정
-
-환경 변수를 통해 다양한 설정을 조정할 수 있습니다:
-
-### API Keys
-
-```env
-ANTHROPIC_API_KEY=your_key
-OPENAI_API_KEY=your_key
-ELEVENLABS_API_KEY=your_key
-```
-
-### 영상 설정
-
-```env
-VIDEO_RESOLUTION=1920x1080  # 1920x1080, 1280x720, 3840x2160
-VIDEO_FPS=30
-BURN_SUBTITLES=true
-```
-
-### TTS 설정
-
-```env
-TTS_PROVIDER=openai  # openai, elevenlabs, google
-TTS_VOICE_ID=alloy  # OpenAI 음성: alloy, echo, fable, onyx, nova, shimmer
-TTS_LANGUAGE=ko-KR
-TTS_SPEED=1.0
-```
-
-### 품질 검토
-
-```env
-QUALITY_CHECK_ENABLED=true
-QUALITY_MIN_SCORE=70
-```
-
-## 🛠️ 개발
-
-### 프로젝트 구조
-
-```
-src/
-├── modules/               # 9개 핵심 모듈
-│   ├── content-intake/
-│   ├── content-analyzer/
-│   ├── planner/
-│   ├── script-generator/
-│   ├── tts/
-│   ├── subtitle-generator/
-│   ├── video-composer/
-│   ├── thumbnail-generator/
-│   └── quality-review/
-├── orchestrator/          # 메인 오케스트레이터
-├── types/                 # TypeScript 타입 정의
-├── utils/                 # 유틸리티 함수
-├── config/                # 설정 파일
-└── index.ts               # 메인 엔트리 포인트
-```
-
-### 빌드
+LibreOffice가 설치되어 있지 않거나 PATH에 없는 경우:
 
 ```bash
-npm run build
+# Linux/Mac
+which libreoffice
+
+# 수동으로 슬라이드 이미지를 생성하고 data/temp/slides_img/에 저장
 ```
 
-### 테스트
+### FFmpeg 에러
+
+FFmpeg가 설치되어 있는지 확인:
 
 ```bash
-npm test
+ffmpeg -version
 ```
 
-### 코드 포맷팅
+### TTS API 에러
 
-```bash
-npm run format
-npm run lint
-```
+- API 키가 올바른지 확인
+- API 사용량 한도 확인
+- 네트워크 연결 확인
 
-## 📋 TODO 목록
+## 라이선스
 
-각 모듈에는 실제 구현이 필요한 부분들이 `TODO` 주석으로 표시되어 있습니다:
+MIT License
 
-### 우선순위 높음
+## 향후 개발 계획
 
-- [ ] **LLM 연동** (Planner, Script Generator, Quality Review)
-  - Claude API를 사용한 콘텐츠 분석 및 스크립트 생성
+- [ ] React 기반 애니메이션 오버레이 시스템
+- [ ] 유튜브 자동 업로드 (Computer Use)
+- [ ] 다국어 지원 (번역 + TTS)
+- [ ] 쇼츠 자동 생성
+- [ ] 웹 UI/대시보드
+- [ ] 도식 라이브러리 구축
 
-- [ ] **실제 TTS 구현**
-  - OpenAI TTS API 연동
-  - ElevenLabs API 연동 (선택)
+## 기여
 
-- [ ] **FFmpeg 영상 합성**
-  - 배경 비디오 생성
-  - 오디오/자막 병합
-  - 자막 번인
+이슈와 PR을 환영합니다!
 
-### 우선순위 중간
+## 문의
 
-- [ ] **콘텐츠 분석 고도화**
-  - NLP 기반 키워드 추출
-  - 더 정교한 구조 분석
-
-- [ ] **썸네일 생성**
-  - DALL-E 또는 Stable Diffusion 연동
-  - 템플릿 기반 텍스트 합성
-
-### 우선순위 낮음
-
-- [ ] 웹 UI 개발
-- [ ] 배치 처리 기능
-- [ ] 클라우드 스토리지 연동
-- [ ] 다국어 지원
-
-## 🤝 기여
-
-기여는 언제나 환영합니다! 이슈나 Pull Request를 자유롭게 제출해주세요.
-
-## 📄 라이선스
-
-MIT License - 자세한 내용은 [LICENSE](LICENSE) 파일을 참조하세요.
-
-## 📧 연락처
-
-- 작성자: jonghyeuk@gmail.com
-- 프로젝트: https://github.com/your-username/auto-youdam-blog
-
-## 🙏 감사의 말
-
-이 프로젝트는 다음 기술들을 사용합니다:
-
-- [Anthropic Claude](https://www.anthropic.com/) - AI 콘텐츠 분석 및 생성
-- [OpenAI](https://openai.com/) - TTS 및 GPT
-- [FFmpeg](https://ffmpeg.org/) - 영상 합성
-- [Cheerio](https://cheerio.js.org/) - HTML 파싱
-- [TypeScript](https://www.typescriptlang.org/) - 타입 안전성
-
----
-
-**Made with ❤️ by the Auto Youdam Blog team**
+프로젝트 관련 문의사항은 이슈로 남겨주세요.
