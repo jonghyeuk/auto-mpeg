@@ -1,1 +1,0 @@
-export { ScriptGeneratorModule } from './ScriptGeneratorModule';

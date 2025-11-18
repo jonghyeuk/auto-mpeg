@@ -1,1 +1,0 @@
-export { ThumbnailGeneratorModule } from './ThumbnailGeneratorModule';

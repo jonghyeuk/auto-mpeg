@@ -138,6 +138,41 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv
+
 # Project specific
 outputs/
 dist/
+data/temp/
+data/output/
+data/meta/
+*.mp4
+*.mp3
+*.wav
+*.png
+!data/input/.gitkeep

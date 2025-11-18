@@ -1,1 +1,0 @@
-export { TTSModule } from './TTSModule';
