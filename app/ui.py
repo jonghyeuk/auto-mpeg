@@ -159,9 +159,12 @@ class GradioUI:
             log_output = self.log("", log_output)
             return "", log_output
 
-    def generate_script_with_thinking(self, slide, context, slide_num, total_slides, progress, log_output):
+    def generate_script_with_thinking(self, slide, context, slide_num, total_slides, target_duration, progress, log_output):
         """
         개별 슬라이드 대본 생성 (사고 과정 포함)
+
+        Args:
+            target_duration: 이 슬라이드의 목표 시간 (초)
         """
         from anthropic import Anthropic
 
@@ -173,6 +176,7 @@ class GradioUI:
         log_output = self.log(f"  제목: {slide.get('title', '')}", log_output)
         body_preview = slide.get('body', '')[:150]
         log_output = self.log(f"  본문: {body_preview}...", log_output)
+        log_output = self.log(f"  목표 시간: {target_duration}초", log_output)
         log_output = self.log("", log_output)
 
         # Claude에게 슬라이드 분석 요청
@@ -181,7 +185,7 @@ class GradioUI:
         try:
             client = Anthropic(api_key=config.ANTHROPIC_API_KEY)
 
-            prompt = f"""당신은 교육 영상 대본 작가입니다. 다음 슬라이드의 내용을 15~20초 분량의 구어체 설명으로 작성해주세요.
+            prompt = f"""당신은 교육 영상 대본 작가입니다. 다음 슬라이드의 내용을 **정확히 {target_duration}초 분량**의 구어체 설명으로 작성해주세요.
 
 【전체 프레젠테이션 맥락】
 {context}
@@ -193,14 +197,21 @@ class GradioUI:
 {f"발표자 노트: {slide.get('notes', '')}" if slide.get('notes') else ''}
 
 【요구사항】
-1. 자연스러운 구어체로 작성 (격식 있지만 친근하게)
-2. 2~3문장으로 구성
-3. 15~20초 안에 읽을 수 있는 분량
-4. 핵심 개념을 명확하게 설명
-5. 이전 슬라이드와의 연결성 고려
+1. **중요**: 정확히 {target_duration}초 안에 읽을 수 있는 분량으로 작성
+2. 자연스러운 구어체로 작성 (격식 있지만 친근하게)
+3. 핵심 개념을 명확하게 설명
+4. 이전 슬라이드와의 연결성 고려
 
-먼저 <thinking> 태그 안에 이 슬라이드의 핵심 메시지와 전달 전략을 간단히 정리하고,
-그 다음 <script> 태그 안에 최종 대본을 작성해주세요."""
+【참고】
+- 한국어 TTS는 1초당 약 3-4글자
+- {target_duration}초 = 약 {int(target_duration * 3.5)}자 분량
+
+먼저 <thinking> 태그 안에:
+1. 이 슬라이드의 핵심 메시지
+2. {target_duration}초 안에 전달할 핵심 내용 선택
+3. 전달 전략
+
+그 다음 <script> 태그 안에 **정확히 {int(target_duration * 3.5)}자 내외**의 최종 대본을 작성해주세요."""
 
             message = client.messages.create(
                 model=config.DEFAULT_LLM_MODEL,
@@ -248,14 +259,19 @@ class GradioUI:
             # 검증
             log_output = self.log("✅ 대본 검증:", log_output)
             word_count = len(script)
-            log_output = self.log(f"  - 글자 수: {word_count}자", log_output)
+            expected_chars = int(target_duration * 3.5)
+            estimated_duration = word_count / 3.5
 
-            if word_count < 30:
-                log_output = self.log("  ⚠️  너무 짧습니다 (30자 미만)", log_output)
-            elif word_count > 150:
-                log_output = self.log("  ⚠️  너무 깁니다 (150자 초과)", log_output)
+            log_output = self.log(f"  - 글자 수: {word_count}자 (목표: {expected_chars}자)", log_output)
+            log_output = self.log(f"  - 예상 시간: {estimated_duration:.1f}초 (목표: {target_duration}초)", log_output)
+
+            # 목표 시간의 ±30% 이내면 OK
+            if estimated_duration < target_duration * 0.7:
+                log_output = self.log(f"  ⚠️  너무 짧습니다 ({estimated_duration:.1f}초 < {target_duration * 0.7:.1f}초)", log_output)
+            elif estimated_duration > target_duration * 1.3:
+                log_output = self.log(f"  ⚠️  너무 깁니다 ({estimated_duration:.1f}초 > {target_duration * 1.3:.1f}초)", log_output)
             else:
-                log_output = self.log("  ✓ 적절한 길이입니다", log_output)
+                log_output = self.log(f"  ✓ 목표 시간에 적합합니다 (±30% 이내)", log_output)
 
             log_output = self.log("", log_output)
 
@@ -275,10 +291,14 @@ class GradioUI:
         output_name,
         voice_choice,
         resolution_choice,
+        total_duration_minutes,
         progress=gr.Progress()
     ):
         """
         PPT를 영상으로 변환하는 메인 함수 (상세 로깅 버전)
+
+        Args:
+            total_duration_minutes: 전체 영상 목표 길이 (분)
         """
         log_output = ""
 
@@ -310,6 +330,12 @@ class GradioUI:
             # 파일명 정리
             output_name = "".join(c for c in output_name if c.isalnum() or c in (' ', '_', '-'))
             output_name = output_name.strip().replace(' ', '_')
+
+            # 영상 길이를 숫자로 변환
+            try:
+                total_duration_minutes = float(total_duration_minutes)
+            except (ValueError, TypeError):
+                total_duration_minutes = 5.0  # 기본값
 
             # 업로드된 파일 복사
             pptx_path = config.INPUT_DIR / Path(pptx_file.name).name
@@ -368,6 +394,18 @@ class GradioUI:
             context_analysis, log_output = self.analyze_ppt_context(slides, progress)
             yield log_output, None
 
+            # 각 슬라이드당 시간 계산
+            total_duration_seconds = total_duration_minutes * 60
+            slides_per_duration = total_duration_seconds / len(slides)
+
+            log_output = self.log("", log_output)
+            log_output = self.log("⏱️  영상 시간 계획:", log_output)
+            log_output = self.log(f"  - 전체 목표 시간: {total_duration_minutes}분 ({total_duration_seconds}초)", log_output)
+            log_output = self.log(f"  - 슬라이드 수: {len(slides)}개", log_output)
+            log_output = self.log(f"  - 슬라이드당 평균: {slides_per_duration:.1f}초", log_output)
+            log_output = self.log("", log_output)
+            yield log_output, None
+
             # ===== STEP 3: AI 대본 생성 (상세 버전) =====
             progress(0.2, desc="AI 대본 생성 중...")
             log_output = self.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", log_output)
@@ -387,6 +425,7 @@ class GradioUI:
                     context_analysis,
                     i + 1,
                     len(slides),
+                    slides_per_duration,  # 각 슬라이드 목표 시간
                     progress,
                     log_output
                 )
@@ -544,16 +583,26 @@ class GradioUI:
                         value="output_video"
                     )
 
+                    with gr.Row():
+                        total_duration = gr.Dropdown(
+                            choices=["1", "3", "5", "10", "15", "20"],
+                            value="5",
+                            label="전체 영상 길이 (분)",
+                            info="선택한 시간에 맞춰 대본 생성"
+                        )
+
                     voice_choice = gr.Dropdown(
                         choices=["alloy", "echo", "fable", "onyx", "nova", "shimmer"],
                         value="alloy",
-                        label="TTS 음성 선택"
+                        label="TTS 음성 선택",
+                        info="OpenAI TTS 음성"
                     )
 
                     resolution_choice = gr.Dropdown(
                         choices=["1920x1080", "1280x720", "3840x2160"],
                         value="1920x1080",
-                        label="해상도"
+                        label="해상도",
+                        info="1080p 권장"
                     )
 
                     convert_btn = gr.Button("🎬 영상 생성", variant="primary", size="lg")
@@ -577,7 +626,7 @@ class GradioUI:
             # 버튼 클릭 이벤트
             convert_btn.click(
                 fn=self.convert_ppt_to_video,
-                inputs=[pptx_input, output_name, voice_choice, resolution_choice],
+                inputs=[pptx_input, output_name, voice_choice, resolution_choice, total_duration],
                 outputs=[progress_output, video_output]
             )
 
