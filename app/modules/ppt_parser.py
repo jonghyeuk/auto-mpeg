@@ -210,35 +210,40 @@ def convert_pptx_to_images(pptx_path: Path, output_dir: Path) -> None:
         print(f"🔄 STEP 2: PDF → PNG 변환 중...")
 
         try:
-            from pdf2image import convert_from_path
+            import fitz  # PyMuPDF
 
-            # PDF를 이미지로 변환
-            images = convert_from_path(
-                str(temp_pdf),
-                dpi=150,  # 해상도
-                fmt='png'
-            )
+            # PDF 열기
+            pdf_document = fitz.open(str(temp_pdf))
+            page_count = pdf_document.page_count
 
-            print(f"  - {len(images)}개 페이지 발견")
+            print(f"  - {page_count}개 페이지 발견")
 
             # 각 페이지를 개별 PNG로 저장
-            for i, image in enumerate(images, start=1):
-                output_path = output_dir / f"slide_{i:03d}.png"
-                image.save(str(output_path), 'PNG')
-                print(f"  - 슬라이드 {i} 저장: {output_path.name}")
+            for page_num in range(page_count):
+                page = pdf_document[page_num]
+
+                # 페이지를 이미지로 렌더링 (150 DPI)
+                mat = fitz.Matrix(150/72, 150/72)  # 72 DPI -> 150 DPI
+                pix = page.get_pixmap(matrix=mat)
+
+                # PNG로 저장
+                output_path = output_dir / f"slide_{page_num + 1:03d}.png"
+                pix.save(str(output_path))
+
+                print(f"  - 슬라이드 {page_num + 1} 저장: {output_path.name}")
+
+            pdf_document.close()
 
             print(f"✓ PPTX → PNG 변환 완료: {output_dir}")
-            print(f"  - 총 {len(images)}개 슬라이드 이미지 생성")
+            print(f"  - 총 {page_count}개 슬라이드 이미지 생성")
 
             # 임시 PDF 파일 삭제
             temp_pdf.unlink()
 
         except ImportError:
-            print("⚠️  pdf2image 모듈이 설치되어 있지 않습니다.")
-            print("   pip install pdf2image 를 실행하세요.")
-            print("   Poppler도 필요합니다:")
-            print("   Windows: https://github.com/oschwartz10612/poppler-windows/releases/")
-            raise ImportError("pdf2image 모듈 필요")
+            print("⚠️  PyMuPDF 모듈이 설치되어 있지 않습니다.")
+            print("   pip install pymupdf 를 실행하세요.")
+            raise ImportError("PyMuPDF 모듈 필요")
 
     except FileNotFoundError:
         raise FileNotFoundError(
