@@ -346,6 +346,16 @@ class GradioUI:
 
             response_text = message.content[0].text.strip()
 
+            # 디버깅: Claude 응답 확인
+            log_output = self.log(f"📡 Claude 응답 받음 (길이: {len(response_text)}자)", log_output)
+            has_thinking = "<thinking>" in response_text
+            has_keywords = "<keywords>" in response_text
+            has_script = "<script>" in response_text
+            log_output = self.log(f"  - <thinking> 태그: {'✓' if has_thinking else '✗'}", log_output)
+            log_output = self.log(f"  - <keywords> 태그: {'✓' if has_keywords else '✗'}", log_output)
+            log_output = self.log(f"  - <script> 태그: {'✓' if has_script else '✗'}", log_output)
+            log_output = self.log("", log_output)
+
             # thinking, keywords, script 분리
             thinking = ""
             keywords = []
@@ -396,6 +406,9 @@ class GradioUI:
                 for kw in keywords:
                     log_output = self.log(f"  - {kw['text']} ({kw['timing']:.1f}초)", log_output)
                 log_output = self.log("", log_output)
+            else:
+                log_output = self.log("⚠️  키워드가 추출되지 않았습니다 (텍스트 애니메이션 없음)", log_output)
+                log_output = self.log("", log_output)
 
             # 최종 대본 표시
             log_output = self.log("📝 생성된 대본:", log_output)
@@ -428,9 +441,14 @@ class GradioUI:
 
         except Exception as e:
             log_output = self.log(f"❌ 대본 생성 실패: {str(e)}", log_output)
+            import traceback
+            error_details = traceback.format_exc()
+            log_output = self.log(f"상세 에러:\n{error_details}", log_output)
+
             # 폴백: 슬라이드 텍스트 사용
             fallback_script = f"{slide.get('title', '')}. {slide.get('body', '')[:100]}"
-            log_output = self.log(f"→ 폴백 대본 사용: {fallback_script[:50]}...", log_output)
+            log_output = self.log(f"⚠️  경고: 폴백 대본 사용 (PPT 원문)", log_output)
+            log_output = self.log(f"→ {fallback_script[:50]}...", log_output)
             log_output = self.log("", log_output)
             return fallback_script, [], log_output
 
@@ -595,6 +613,14 @@ class GradioUI:
 
             log_output = self.log("", log_output)
             log_output = self.log(f"💾 대본 저장 완료: {scripts_json}", log_output)
+            log_output = self.log(f"  - 총 {len(scripts_data)}개 대본 저장", log_output)
+            # 첫 번째 대본 미리보기 (TTS가 실제로 읽을 내용)
+            if scripts_data:
+                first_script_preview = scripts_data[0]["script"][:80]
+                log_output = self.log(f"  - 첫 번째 대본: {first_script_preview}...", log_output)
+                first_keywords = scripts_data[0].get("keywords", [])
+                if first_keywords:
+                    log_output = self.log(f"  - 첫 번째 키워드: {[k['text'] for k in first_keywords]}", log_output)
             log_output = self.log("", log_output)
             yield log_output, None
 
