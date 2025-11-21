@@ -154,12 +154,15 @@ def convert_pptx_to_images(pptx_path: Path, output_dir: Path) -> None:
     """
     LibreOffice를 사용하여 PPTX를 PNG 이미지로 변환
 
+    LibreOffice는 먼저 PDF로 변환하고, 그 다음 각 페이지를 PNG로 변환합니다.
+
     Args:
         pptx_path: PPTX 파일 경로
         output_dir: 출력 디렉토리
     """
     import subprocess
     import platform
+    import time
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -174,26 +177,68 @@ def convert_pptx_to_images(pptx_path: Path, output_dir: Path) -> None:
             "  - C:\\Program Files (x86)\\LibreOffice\\program\\soffice.exe"
         )
 
-    # Windows에서는 경로에 공백이 있을 수 있으므로 경로를 따옴표로 감싸지 않고 리스트로 전달
-    cmd = [
+    print(f"📄 LibreOffice 경로: {libreoffice_path}")
+
+    # Step 1: PPTX → PDF 변환
+    print(f"🔄 STEP 1: PPTX → PDF 변환 중...")
+    temp_pdf = output_dir / f"{pptx_path.stem}.pdf"
+
+    cmd_pdf = [
         libreoffice_path,
         "--headless",
-        "--convert-to", "png",
+        "--convert-to", "pdf",
         "--outdir", str(output_dir),
         str(pptx_path)
     ]
 
     try:
-        print(f"📄 LibreOffice 경로: {libreoffice_path}")
-        print(f"🔄 PPTX → PNG 변환 중...")
+        result = subprocess.run(cmd_pdf, capture_output=True, text=True, timeout=120)
 
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        if result.returncode != 0:
+            print(f"✗ PDF 변환 실패: {result.stderr}")
+            raise RuntimeError(f"LibreOffice PDF 변환 실패: {result.stderr}")
 
-        if result.returncode == 0:
+        # PDF 파일 생성 대기
+        time.sleep(2)
+
+        if not temp_pdf.exists():
+            raise FileNotFoundError(f"PDF 파일이 생성되지 않았습니다: {temp_pdf}")
+
+        print(f"✓ PDF 변환 완료: {temp_pdf.name}")
+
+        # Step 2: PDF → PNG 변환 (각 페이지)
+        print(f"🔄 STEP 2: PDF → PNG 변환 중...")
+
+        try:
+            from pdf2image import convert_from_path
+
+            # PDF를 이미지로 변환
+            images = convert_from_path(
+                str(temp_pdf),
+                dpi=150,  # 해상도
+                fmt='png'
+            )
+
+            print(f"  - {len(images)}개 페이지 발견")
+
+            # 각 페이지를 개별 PNG로 저장
+            for i, image in enumerate(images, start=1):
+                output_path = output_dir / f"slide_{i:03d}.png"
+                image.save(str(output_path), 'PNG')
+                print(f"  - 슬라이드 {i} 저장: {output_path.name}")
+
             print(f"✓ PPTX → PNG 변환 완료: {output_dir}")
-        else:
-            print(f"✗ 변환 실패: {result.stderr}")
-            raise RuntimeError(f"LibreOffice 변환 실패: {result.stderr}")
+            print(f"  - 총 {len(images)}개 슬라이드 이미지 생성")
+
+            # 임시 PDF 파일 삭제
+            temp_pdf.unlink()
+
+        except ImportError:
+            print("⚠️  pdf2image 모듈이 설치되어 있지 않습니다.")
+            print("   pip install pdf2image 를 실행하세요.")
+            print("   Poppler도 필요합니다:")
+            print("   Windows: https://github.com/oschwartz10612/poppler-windows/releases/")
+            raise ImportError("pdf2image 모듈 필요")
 
     except FileNotFoundError:
         raise FileNotFoundError(
