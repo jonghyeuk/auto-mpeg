@@ -92,21 +92,35 @@ TTS_VOICE=alloy
 
 ## 사용법
 
-### 기본 사용
+### 방법 1: Gradio 웹 UI (추천) 🌟
+
+브라우저에서 쉽게 사용할 수 있는 GUI 버전:
 
 ```bash
+# UI 실행
+python app/ui.py
+
+# 브라우저에서 http://localhost:7860 자동으로 열림
+```
+
+**특징**:
+- 드래그 앤 드롭으로 PPT 업로드
+- 실시간 진행 상황 확인
+- TTS 음성 및 해상도 선택
+- 완성된 영상 바로 다운로드
+
+### 방법 2: CLI (커맨드 라인)
+
+터미널에서 직접 실행:
+
+```bash
+# 기본 사용
 python app/main.py input.pptx
-```
 
-### 출력 파일명 지정
-
-```bash
+# 출력 파일명 지정
 python app/main.py input.pptx --output my_video
-```
 
-### 디버그 모드
-
-```bash
+# 디버그 모드
 python app/main.py input.pptx --debug
 ```
 
@@ -116,6 +130,7 @@ python app/main.py input.pptx --debug
 project_root/
 ├── app/
 │   ├── main.py                 # CLI 엔트리포인트
+│   ├── ui.py                   # Gradio 웹 UI
 │   ├── config.py               # 설정 관리
 │   └── modules/
 │       ├── ppt_parser.py       # 모듈 A: PPT 파서
@@ -197,6 +212,21 @@ project_root/
 - 최종 MP4 파일 생성
 
 ## 예제 워크플로우
+
+### 웹 UI 사용
+
+```bash
+# 1. UI 실행
+python app/ui.py
+
+# 2. 브라우저에서 작업
+#    - http://localhost:7860 접속
+#    - PPT 파일 드래그 앤 드롭
+#    - 설정 선택 후 '영상 생성' 클릭
+#    - 완성된 영상 다운로드
+```
+
+### CLI 사용
 
 ```bash
 # 1. PPT 파일 준비
