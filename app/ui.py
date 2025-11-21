@@ -9,6 +9,7 @@ import shutil
 import os
 import json
 import subprocess
+from pptx import Presentation
 
 # 프로젝트 루트를 Python path에 추가
 project_root = Path(__file__).parent.parent
@@ -44,6 +45,109 @@ class GradioUI:
     def log(self, message, log_text=""):
         """로그 메시지 누적"""
         return log_text + message + "\n"
+
+    def count_slides(self, pptx_file):
+        """
+        PPT 파일의 슬라이드 개수를 빠르게 카운트
+
+        Args:
+            pptx_file: Gradio file object 또는 파일 경로
+
+        Returns:
+            슬라이드 개수 (int)
+        """
+        try:
+            if pptx_file is None:
+                return 0
+
+            # Gradio file object에서 경로 추출
+            file_path = pptx_file.name if hasattr(pptx_file, 'name') else pptx_file
+
+            prs = Presentation(file_path)
+            return len(prs.slides)
+        except Exception as e:
+            print(f"슬라이드 카운트 실패: {e}")
+            return 0
+
+    def calculate_duration_range(self, slide_count):
+        """
+        슬라이드 개수에 따른 적정 영상 길이 범위 계산
+
+        규칙:
+        - 슬라이드당 최소 15초 (빠른 요약)
+        - 슬라이드당 최대 120초 (2분, 매우 자세한 설명)
+
+        Args:
+            slide_count: 슬라이드 개수
+
+        Returns:
+            (min_minutes, max_minutes, recommended_minutes)
+        """
+        if slide_count == 0:
+            return 1, 20, 5
+
+        # 슬라이드당 최소/최대 시간 (초)
+        MIN_SECONDS_PER_SLIDE = 15  # 최소 15초 (핵심만 빠르게)
+        MAX_SECONDS_PER_SLIDE = 120  # 최대 120초 (2분, 매우 자세히)
+        RECOMMENDED_SECONDS_PER_SLIDE = 40  # 권장 40초
+
+        min_seconds = slide_count * MIN_SECONDS_PER_SLIDE
+        max_seconds = slide_count * MAX_SECONDS_PER_SLIDE
+        recommended_seconds = slide_count * RECOMMENDED_SECONDS_PER_SLIDE
+
+        # 초를 분으로 변환 (반올림)
+        min_minutes = round(min_seconds / 60)
+        max_minutes = round(max_seconds / 60)
+        recommended_minutes = round(recommended_seconds / 60)
+
+        # 최소 1분
+        min_minutes = max(1, min_minutes)
+
+        return min_minutes, max_minutes, recommended_minutes
+
+    def get_available_durations(self, slide_count):
+        """
+        슬라이드 개수에 따라 선택 가능한 영상 길이 옵션 반환
+
+        Args:
+            slide_count: 슬라이드 개수
+
+        Returns:
+            choices: 선택 가능한 옵션 리스트
+            value: 기본 선택값
+            info_message: 사용자에게 보여줄 정보 메시지
+        """
+        if slide_count == 0:
+            return ["1", "3", "5", "10", "15", "20"], "5", "PPT를 업로드하면 적정 시간을 추천해드립니다"
+
+        min_min, max_min, recommended_min = self.calculate_duration_range(slide_count)
+
+        # 모든 가능한 옵션
+        all_options = [1, 3, 5, 10, 15, 20]
+
+        # 범위 내의 옵션만 선택
+        available = [str(m) for m in all_options if min_min <= m <= max_min]
+
+        # 선택 가능한 옵션이 없으면 범위 확장
+        if not available:
+            if max_min < 1:
+                available = ["1"]
+            elif min_min > 20:
+                available = ["20"]
+            else:
+                available = [str(min_min)] if min_min not in all_options else [str(min(all_options, key=lambda x: abs(x - min_min)))]
+
+        # 기본값: 권장 시간과 가장 가까운 옵션
+        default_value = min(available, key=lambda x: abs(int(x) - recommended_min))
+
+        # 정보 메시지
+        info_message = (
+            f"📊 슬라이드 {slide_count}장 분석 완료\n"
+            f"적정 범위: {min_min}~{max_min}분\n"
+            f"권장: {recommended_min}분"
+        )
+
+        return available, default_value, info_message
 
     def check_dependencies(self):
         """시스템 의존성 체크"""
@@ -242,6 +346,16 @@ class GradioUI:
 
             response_text = message.content[0].text.strip()
 
+            # 디버깅: Claude 응답 확인
+            log_output = self.log(f"📡 Claude 응답 받음 (길이: {len(response_text)}자)", log_output)
+            has_thinking = "<thinking>" in response_text
+            has_keywords = "<keywords>" in response_text
+            has_script = "<script>" in response_text
+            log_output = self.log(f"  - <thinking> 태그: {'✓' if has_thinking else '✗'}", log_output)
+            log_output = self.log(f"  - <keywords> 태그: {'✓' if has_keywords else '✗'}", log_output)
+            log_output = self.log(f"  - <script> 태그: {'✓' if has_script else '✗'}", log_output)
+            log_output = self.log("", log_output)
+
             # thinking, keywords, script 분리
             thinking = ""
             keywords = []
@@ -292,6 +406,9 @@ class GradioUI:
                 for kw in keywords:
                     log_output = self.log(f"  - {kw['text']} ({kw['timing']:.1f}초)", log_output)
                 log_output = self.log("", log_output)
+            else:
+                log_output = self.log("⚠️  키워드가 추출되지 않았습니다 (텍스트 애니메이션 없음)", log_output)
+                log_output = self.log("", log_output)
 
             # 최종 대본 표시
             log_output = self.log("📝 생성된 대본:", log_output)
@@ -324,9 +441,14 @@ class GradioUI:
 
         except Exception as e:
             log_output = self.log(f"❌ 대본 생성 실패: {str(e)}", log_output)
+            import traceback
+            error_details = traceback.format_exc()
+            log_output = self.log(f"상세 에러:\n{error_details}", log_output)
+
             # 폴백: 슬라이드 텍스트 사용
             fallback_script = f"{slide.get('title', '')}. {slide.get('body', '')[:100]}"
-            log_output = self.log(f"→ 폴백 대본 사용: {fallback_script[:50]}...", log_output)
+            log_output = self.log(f"⚠️  경고: 폴백 대본 사용 (PPT 원문)", log_output)
+            log_output = self.log(f"→ {fallback_script[:50]}...", log_output)
             log_output = self.log("", log_output)
             return fallback_script, [], log_output
 
@@ -491,6 +613,14 @@ class GradioUI:
 
             log_output = self.log("", log_output)
             log_output = self.log(f"💾 대본 저장 완료: {scripts_json}", log_output)
+            log_output = self.log(f"  - 총 {len(scripts_data)}개 대본 저장", log_output)
+            # 첫 번째 대본 미리보기 (TTS가 실제로 읽을 내용)
+            if scripts_data:
+                first_script_preview = scripts_data[0]["script"][:80]
+                log_output = self.log(f"  - 첫 번째 대본: {first_script_preview}...", log_output)
+                first_keywords = scripts_data[0].get("keywords", [])
+                if first_keywords:
+                    log_output = self.log(f"  - 첫 번째 키워드: {[k['text'] for k in first_keywords]}", log_output)
             log_output = self.log("", log_output)
             yield log_output, None
 
@@ -633,12 +763,15 @@ class GradioUI:
                         value="output_video"
                     )
 
+                    # 슬라이드 개수 표시 (숨김)
+                    slide_count_state = gr.State(value=0)
+
                     with gr.Row():
                         total_duration = gr.Dropdown(
                             choices=["1", "3", "5", "10", "15", "20"],
                             value="5",
                             label="전체 영상 길이 (분)",
-                            info="선택한 시간에 맞춰 대본 생성"
+                            info="PPT를 업로드하면 적정 시간을 추천해드립니다"
                         )
 
                     voice_choice = gr.Dropdown(
@@ -677,6 +810,20 @@ class GradioUI:
             video_output = gr.Video(
                 label="완성된 영상",
                 autoplay=False
+            )
+
+            # PPT 업로드 시 슬라이드 개수 분석 및 영상 길이 옵션 업데이트
+            def update_duration_options(pptx_file):
+                """PPT 업로드 시 슬라이드 개수에 따라 영상 길이 옵션 업데이트"""
+                slide_count = self.count_slides(pptx_file)
+                choices, value, info = self.get_available_durations(slide_count)
+
+                return gr.Dropdown(choices=choices, value=value, info=info), slide_count
+
+            pptx_input.change(
+                fn=update_duration_options,
+                inputs=[pptx_input],
+                outputs=[total_duration, slide_count_state]
             )
 
             # 버튼 클릭 이벤트
