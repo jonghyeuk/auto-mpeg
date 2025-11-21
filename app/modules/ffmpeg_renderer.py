@@ -4,9 +4,10 @@
 """
 import json
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import subprocess
 import os
+from .font_utils import get_font_path_with_fallback
 
 
 class FFmpegRenderer:
@@ -39,21 +40,67 @@ class FFmpegRenderer:
         image_path: Path,
         audio_path: Path,
         duration: float,
-        output_path: Path
+        output_path: Path,
+        keywords: Optional[List[Dict[str, Any]]] = None,
+        enable_text_animation: bool = False
     ) -> bool:
         """
-        단일 슬라이드 클립 생성 (이미지 + 오디오)
+        단일 슬라이드 클립 생성 (이미지 + 오디오 + 텍스트 애니메이션)
 
         Args:
             image_path: 슬라이드 이미지 경로
             audio_path: 오디오 파일 경로
             duration: 영상 길이 (초)
             output_path: 출력 영상 경로
+            keywords: 텍스트 애니메이션용 키워드 리스트 [{"text": "...", "timing": 2.5}, ...]
+            enable_text_animation: 텍스트 애니메이션 사용 여부
 
         Returns:
             성공 여부
         """
         try:
+            # 기본 비디오 필터 (스케일 및 패딩)
+            vf_filters = [f"scale={self.width}:{self.height}:force_original_aspect_ratio=decrease,pad={self.width}:{self.height}:(ow-iw)/2:(oh-ih)/2"]
+
+            # 텍스트 애니메이션 추가
+            if enable_text_animation and keywords:
+                font_path = get_font_path_with_fallback()
+                # Windows 경로를 FFmpeg 형식으로 변환 (역슬래시 → 슬래시, 콜론 이스케이프)
+                font_path_escaped = font_path.replace('\\', '/').replace(':', '\\:')
+
+                for kw in keywords:
+                    text = kw.get("text", "")
+                    timing = kw.get("timing", 0)
+
+                    # 애니메이션 타이밍
+                    fade_in_start = max(0, timing - 0.5)
+                    fade_in_end = timing
+                    fade_out_start = timing + 2.0
+                    fade_out_end = timing + 2.5
+
+                    # 텍스트 이스케이프 (FFmpeg drawtext용)
+                    text_escaped = text.replace("'", "'\\\\\\''").replace(":", "\\:")
+
+                    # drawtext 필터
+                    drawtext_filter = (
+                        f"drawtext="
+                        f"text='{text_escaped}':"
+                        f"fontfile='{font_path_escaped}':"
+                        f"fontsize=80:"
+                        f"fontcolor=white:"
+                        f"borderw=3:"
+                        f"bordercolor=black:"
+                        f"x=(w-text_w)/2:"
+                        f"y=h-150:"  # 화면 하단에서 150px 위
+                        f"enable='between(t,{fade_in_start},{fade_out_end})':"
+                        f"alpha='if(lt(t,{fade_in_end}),(t-{fade_in_start})/0.5,if(lt(t,{fade_out_start}),1,({fade_out_end}-t)/0.5))'"
+                    )
+
+                    vf_filters.append(drawtext_filter)
+
+            # 모든 필터를 ","로 연결
+            vf_string = ",".join(vf_filters)
+
             cmd = [
                 "ffmpeg",
                 "-y",  # 덮어쓰기
@@ -67,7 +114,7 @@ class FFmpegRenderer:
                 "-b:a", "192k",  # 오디오 비트레이트
                 "-ar", "44100",  # 샘플레이트
                 "-pix_fmt", "yuv420p",  # 픽셀 포맷
-                "-vf", f"scale={self.width}:{self.height}:force_original_aspect_ratio=decrease,pad={self.width}:{self.height}:(ow-iw)/2:(oh-ih)/2",
+                "-vf", vf_string,  # 비디오 필터
                 "-t", str(duration),  # 영상 길이
                 "-shortest",  # 짧은 입력에 맞춤
                 str(output_path)
@@ -142,7 +189,9 @@ class FFmpegRenderer:
         slides_img_dir: Path,
         audio_dir: Path,
         clips_dir: Path,
-        output_video_path: Path
+        output_video_path: Path,
+        scripts_json_path: Optional[Path] = None,
+        enable_text_animation: bool = False
     ) -> bool:
         """
         전체 영상 렌더링
@@ -154,6 +203,8 @@ class FFmpegRenderer:
             audio_dir: 오디오 디렉토리
             clips_dir: 클립 임시 디렉토리
             output_video_path: 최종 출력 영상 경로
+            scripts_json_path: 대본 정보 JSON (키워드 포함)
+            enable_text_animation: 텍스트 애니메이션 사용 여부
 
         Returns:
             성공 여부
@@ -164,6 +215,14 @@ class FFmpegRenderer:
 
         with open(audio_meta_path, 'r', encoding='utf-8') as f:
             audio_meta = json.load(f)
+
+        # 대본 데이터 로드 (키워드 포함)
+        scripts_data = {}
+        if scripts_json_path and scripts_json_path.exists():
+            with open(scripts_json_path, 'r', encoding='utf-8') as f:
+                scripts_list = json.load(f)
+                # index로 빠르게 검색할 수 있도록 딕셔너리로 변환
+                scripts_data = {s["index"]: s for s in scripts_list}
 
         clips_dir.mkdir(parents=True, exist_ok=True)
         clip_paths = []
@@ -192,12 +251,21 @@ class FFmpegRenderer:
 
             print(f"  슬라이드 {index}: 클립 생성 중...")
 
+            # 키워드 가져오기
+            keywords = []
+            if enable_text_animation and index in scripts_data:
+                keywords = scripts_data[index].get("keywords", [])
+                if keywords:
+                    print(f"    → 키워드 {len(keywords)}개 애니메이션 추가")
+
             # 클립 생성
             success = self.create_slide_clip(
                 image_path,
                 audio_path,
                 audio_info["duration"],
-                clip_path
+                clip_path,
+                keywords=keywords,
+                enable_text_animation=enable_text_animation
             )
 
             if success:
