@@ -21,5 +21,5 @@ requests>=2.31.0
 # UI
 gradio>=4.0.0
 
-# PDF to Image
-pdf2image>=1.16.3
+# PDF to Image (PyMuPDF - no Poppler needed!)
+pymupdf>=1.23.0
