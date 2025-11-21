@@ -116,6 +116,40 @@ class PPTParser:
         return slides_data
 
 
+def find_libreoffice_path():
+    """
+    시스템에서 LibreOffice 실행 파일 경로 찾기
+
+    Returns:
+        LibreOffice 실행 파일 경로 또는 None
+    """
+    import os
+    import platform
+
+    system = platform.system()
+
+    if system == "Windows":
+        # Windows에서 가능한 경로들
+        possible_paths = [
+            r"C:\Program Files\LibreOffice\program\soffice.exe",
+            r"C:\Program Files (x86)\LibreOffice\program\soffice.exe",
+            os.path.expandvars(r"%ProgramFiles%\LibreOffice\program\soffice.exe"),
+            os.path.expandvars(r"%ProgramFiles(x86)%\LibreOffice\program\soffice.exe"),
+        ]
+
+        for path in possible_paths:
+            if Path(path).exists():
+                return path
+
+        return None
+
+    elif system == "Darwin":  # macOS
+        return "/Applications/LibreOffice.app/Contents/MacOS/soffice"
+
+    else:  # Linux
+        return "libreoffice"
+
+
 def convert_pptx_to_images(pptx_path: Path, output_dir: Path) -> None:
     """
     LibreOffice를 사용하여 PPTX를 PNG 이미지로 변환
@@ -125,12 +159,24 @@ def convert_pptx_to_images(pptx_path: Path, output_dir: Path) -> None:
         output_dir: 출력 디렉토리
     """
     import subprocess
+    import platform
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # LibreOffice를 사용한 변환 (Linux/Mac)
+    # LibreOffice 실행 파일 찾기
+    libreoffice_path = find_libreoffice_path()
+
+    if not libreoffice_path:
+        raise FileNotFoundError(
+            "LibreOffice를 찾을 수 없습니다. "
+            "다음 위치에 설치되어 있는지 확인하세요:\n"
+            "  - C:\\Program Files\\LibreOffice\\program\\soffice.exe\n"
+            "  - C:\\Program Files (x86)\\LibreOffice\\program\\soffice.exe"
+        )
+
+    # Windows에서는 경로에 공백이 있을 수 있으므로 경로를 따옴표로 감싸지 않고 리스트로 전달
     cmd = [
-        "libreoffice",
+        libreoffice_path,
         "--headless",
         "--convert-to", "png",
         "--outdir", str(output_dir),
@@ -138,15 +184,24 @@ def convert_pptx_to_images(pptx_path: Path, output_dir: Path) -> None:
     ]
 
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        print(f"📄 LibreOffice 경로: {libreoffice_path}")
+        print(f"🔄 PPTX → PNG 변환 중...")
+
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+
         if result.returncode == 0:
             print(f"✓ PPTX → PNG 변환 완료: {output_dir}")
         else:
             print(f"✗ 변환 실패: {result.stderr}")
+            raise RuntimeError(f"LibreOffice 변환 실패: {result.stderr}")
+
     except FileNotFoundError:
-        print("⚠ LibreOffice가 설치되어 있지 않습니다. 수동으로 슬라이드 이미지를 생성해주세요.")
+        raise FileNotFoundError(
+            "LibreOffice가 설치되어 있지 않습니다.\n"
+            "https://www.libreoffice.org/download/download/ 에서 다운로드하세요."
+        )
     except subprocess.TimeoutExpired:
-        print("✗ 변환 시간 초과")
+        raise TimeoutError("LibreOffice 변환 시간 초과 (120초)")
 
 
 if __name__ == "__main__":
