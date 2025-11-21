@@ -185,7 +185,10 @@ class GradioUI:
         try:
             client = Anthropic(api_key=config.ANTHROPIC_API_KEY)
 
-            prompt = f"""당신은 교육 영상 대본 작가입니다. 다음 슬라이드의 내용을 **정확히 {target_duration}초 분량**의 구어체 설명으로 작성해주세요.
+            prompt = f"""당신은 학생들을 가르치는 친절한 **강사**입니다.
+다음 슬라이드를 보면서 학생들에게 내용을 **가르쳐주세요**.
+단순히 텍스트를 읽는 것이 아니라, 강의실에서 학생들 앞에 서서
+자연스럽게 설명하듯이 말해야 합니다.
 
 【전체 프레젠테이션 맥락】
 {context}
@@ -196,34 +199,52 @@ class GradioUI:
 {slide.get('body', '')}
 {f"발표자 노트: {slide.get('notes', '')}" if slide.get('notes') else ''}
 
-【요구사항】
-1. **중요**: 정확히 {target_duration}초 안에 읽을 수 있는 분량으로 작성
-2. 자연스러운 구어체로 작성 (격식 있지만 친근하게)
-3. 핵심 개념을 명확하게 설명
-4. 이전 슬라이드와의 연결성 고려
+【강사로서 반드시 지켜야 할 사항】
+1. ✅ **슬라이드의 모든 내용을 빠짐없이 설명**하세요
+   - 제목, 본문, 그림, 도표, 차트 등 모든 시각적 요소 포함
+   - 시간이 짧더라도(1분) 핵심 의미와 시각적 요소는 꼭 언급
 
-【참고】
-- 한국어 TTS는 1초당 약 3-4글자
-- {target_duration}초 = 약 {int(target_duration * 3.5)}자 분량
+2. ✅ **일반인/학생이 쉽게 이해할 수 있도록** 풀어서 설명하세요
+   - 전문 용어는 쉬운 말로 바꾸거나 부연 설명
+   - 비유와 예시를 활용하여 개념을 명확히 전달
+   - "예를 들어~", "쉽게 말하면~" 같은 표현 활용
+
+3. ✅ **자연스러운 구어체**로 말하세요
+   - 마치 학생들이 여러분 앞에 앉아있다고 생각하고 작성
+   - "~입니다", "~이에요", "~죠?" 같은 자연스러운 어미
+   - 강의실에서 실제로 말하는 것처럼
+
+4. ⏱️ **정확히 {target_duration}초 분량**으로 작성
+   - 한국어 TTS: 1초당 약 3-4글자
+   - 목표: 약 {int(target_duration * 3.5)}자 내외
 
 먼저 <thinking> 태그 안에:
-1. 이 슬라이드의 핵심 메시지
-2. {target_duration}초 안에 전달할 핵심 내용 선택
-3. 전달 전략
+1. 이 슬라이드에서 학생들이 꼭 이해해야 할 핵심 내용
+2. 시각적 요소(그림, 도표, 차트 등)가 있다면 어떻게 설명할지
+3. {target_duration}초 안에 모든 내용을 어떻게 전달할지 전략
+4. 어떤 비유나 예시를 사용하여 쉽게 설명할지
 
-그 다음 <script> 태그 안에 **정확히 {int(target_duration * 3.5)}자 내외**의 최종 대본을 작성해주세요."""
+그 다음 <keywords> 태그 안에:
+- 이 슬라이드의 **핵심 키워드 2-3개**를 선정
+- 각 키워드가 대본에서 언급되는 대략적인 시점(초)을 예측
+- 형식: "키워드|시점초" (예: "머신러닝|2.5")
+- 한 줄에 하나씩 작성
+
+마지막으로 <script> 태그 안에 **정확히 {int(target_duration * 3.5)}자 내외**로
+마치 강의실에서 학생들에게 설명하듯이 자연스러운 구어체 강의 대본을 작성해주세요."""
 
             message = client.messages.create(
                 model=config.DEFAULT_LLM_MODEL,
-                max_tokens=1024,
+                max_tokens=2048,  # 강사 스타일의 자세한 설명을 위해 증가
                 temperature=0.7,
                 messages=[{"role": "user", "content": prompt}]
             )
 
             response_text = message.content[0].text.strip()
 
-            # thinking과 script 분리
+            # thinking, keywords, script 분리
             thinking = ""
+            keywords = []
             script = ""
 
             if "<thinking>" in response_text and "</thinking>" in response_text:
@@ -231,13 +252,30 @@ class GradioUI:
                 thinking_end = response_text.find("</thinking>")
                 thinking = response_text[thinking_start:thinking_end].strip()
 
+            if "<keywords>" in response_text and "</keywords>" in response_text:
+                keywords_start = response_text.find("<keywords>") + len("<keywords>")
+                keywords_end = response_text.find("</keywords>")
+                keywords_text = response_text[keywords_start:keywords_end].strip()
+
+                # 키워드 파싱: "키워드|시점" 형식
+                for line in keywords_text.split('\n'):
+                    line = line.strip().lstrip('-').strip()
+                    if '|' in line:
+                        parts = line.split('|')
+                        keyword_text = parts[0].strip()
+                        try:
+                            timing = float(parts[1].strip().replace('초', ''))
+                            keywords.append({"text": keyword_text, "timing": timing})
+                        except:
+                            pass
+
             if "<script>" in response_text and "</script>" in response_text:
                 script_start = response_text.find("<script>") + len("<script>")
                 script_end = response_text.find("</script>")
                 script = response_text[script_start:script_end].strip()
             else:
                 # 태그가 없으면 전체를 script로 사용
-                script = response_text.replace("<thinking>", "").replace("</thinking>", "").replace("<script>", "").replace("</script>", "").strip()
+                script = response_text.replace("<thinking>", "").replace("</thinking>", "").replace("<keywords>", "").replace("</keywords>", "").replace("<script>", "").replace("</script>", "").strip()
 
             # Claude의 사고 과정 표시
             if thinking:
@@ -246,6 +284,13 @@ class GradioUI:
                 for line in thinking.split('\n'):
                     log_output = self.log(f"│ {line[:40]:<40} │", log_output)
                 log_output = self.log("└─────────────────────────────────────────┘", log_output)
+                log_output = self.log("", log_output)
+
+            # 핵심 키워드 표시
+            if keywords:
+                log_output = self.log("🔑 핵심 키워드 (텍스트 애니메이션):", log_output)
+                for kw in keywords:
+                    log_output = self.log(f"  - {kw['text']} ({kw['timing']:.1f}초)", log_output)
                 log_output = self.log("", log_output)
 
             # 최종 대본 표시
@@ -275,7 +320,7 @@ class GradioUI:
 
             log_output = self.log("", log_output)
 
-            return script, log_output
+            return script, keywords, log_output
 
         except Exception as e:
             log_output = self.log(f"❌ 대본 생성 실패: {str(e)}", log_output)
@@ -283,7 +328,7 @@ class GradioUI:
             fallback_script = f"{slide.get('title', '')}. {slide.get('body', '')[:100]}"
             log_output = self.log(f"→ 폴백 대본 사용: {fallback_script[:50]}...", log_output)
             log_output = self.log("", log_output)
-            return fallback_script, log_output
+            return fallback_script, [], log_output
 
     def convert_ppt_to_video(
         self,
@@ -292,6 +337,7 @@ class GradioUI:
         voice_choice,
         resolution_choice,
         total_duration_minutes,
+        enable_text_animation,
         progress=gr.Progress()
     ):
         """
@@ -299,6 +345,7 @@ class GradioUI:
 
         Args:
             total_duration_minutes: 전체 영상 목표 길이 (분)
+            enable_text_animation: 텍스트 애니메이션 사용 여부
         """
         log_output = ""
 
@@ -420,7 +467,7 @@ class GradioUI:
                 progress_pct = 0.2 + (0.4 * (i + 1) / len(slides))
                 progress(progress_pct, desc=f"대본 생성 중... ({i+1}/{len(slides)})")
 
-                script, log_output = self.generate_script_with_thinking(
+                script, keywords, log_output = self.generate_script_with_thinking(
                     slide,
                     context_analysis,
                     i + 1,
@@ -432,7 +479,8 @@ class GradioUI:
 
                 scripts_data.append({
                     "index": slide["index"],
-                    "script": script
+                    "script": script,
+                    "keywords": keywords  # 텍스트 애니메이션용 키워드
                 })
 
                 yield log_output, None
@@ -493,7 +541,9 @@ class GradioUI:
                 config.SLIDES_IMG_DIR,
                 config.AUDIO_DIR,
                 config.CLIPS_DIR,
-                final_video
+                final_video,
+                scripts_json_path=scripts_json,
+                enable_text_animation=enable_text_animation
             )
 
             if not success:
@@ -605,6 +655,12 @@ class GradioUI:
                         info="1080p 권장"
                     )
 
+                    enable_text_animation = gr.Checkbox(
+                        label="🔤 텍스트 애니메이션 사용",
+                        value=True,
+                        info="핵심 키워드를 화면에 fade in/out 효과로 표시"
+                    )
+
                     convert_btn = gr.Button("🎬 영상 생성", variant="primary", size="lg")
 
                 with gr.Column(scale=1):
@@ -626,7 +682,7 @@ class GradioUI:
             # 버튼 클릭 이벤트
             convert_btn.click(
                 fn=self.convert_ppt_to_video,
-                inputs=[pptx_input, output_name, voice_choice, resolution_choice, total_duration],
+                inputs=[pptx_input, output_name, voice_choice, resolution_choice, total_duration, enable_text_animation],
                 outputs=[progress_output, video_output]
             )
 
