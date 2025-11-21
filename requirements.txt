@@ -17,3 +17,6 @@ python-dotenv>=1.0.0
 
 # 유틸리티
 requests>=2.31.0
+
+# UI
+gradio>=4.0.0
