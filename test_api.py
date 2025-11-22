@@ -16,12 +16,33 @@ client = Anthropic(api_key=api_key)
 
 # 테스트할 모델 목록 (오래된 것부터 최신 것까지)
 test_models = [
+    # Claude 3 시리즈
     "claude-3-opus-20240229",
     "claude-3-sonnet-20240229",
     "claude-3-haiku-20240307",
+
+    # Claude 3.5 시리즈
     "claude-3-5-sonnet-20240620",
     "claude-3-5-sonnet-20241022",
     "claude-3-5-sonnet-latest",
+    "claude-3-5-haiku-20241022",
+
+    # Claude 3.7 시리즈 (추측)
+    "claude-3-7-sonnet-20250219",
+    "claude-sonnet-3.7",
+
+    # Claude 4 시리즈 (추측)
+    "claude-4-opus-20250514",
+    "claude-4-sonnet-20250514",
+    "claude-4-haiku-20250514",
+    "claude-opus-4",
+    "claude-sonnet-4",
+    "claude-haiku-4",
+
+    # Latest aliases
+    "claude-opus-latest",
+    "claude-sonnet-latest",
+    "claude-haiku-latest",
 ]
 
 print("\n" + "="*60)
