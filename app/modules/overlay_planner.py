@@ -12,7 +12,7 @@ import os
 class OverlayPlanner:
     """LLM을 사용하여 슬라이드별 강조 애니메이션 계획을 생성하는 클래스"""
 
-    def __init__(self, api_key: str = None, model: str = "claude-3-opus-20240229"):
+    def __init__(self, api_key: str = None, model: str = "claude-3-7-sonnet-20250219"):
         """
         Args:
             api_key: Anthropic API 키
