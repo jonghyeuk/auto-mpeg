@@ -28,6 +28,8 @@ print("\n" + "="*60)
 print("Claude API 모델 접근 테스트")
 print("="*60)
 
+successful_models = []
+
 for model in test_models:
     try:
         print(f"\n테스트 중: {model}")
@@ -37,8 +39,7 @@ for model in test_models:
             messages=[{"role": "user", "content": "Hi"}]
         )
         print(f"✅ 성공! 응답: {message.content[0].text[:30]}...")
-        print(f"   → 이 모델을 사용하세요: {model}")
-        break  # 성공하면 중단
+        successful_models.append(model)
     except Exception as e:
         error_str = str(e)
         if "404" in error_str or "not_found_error" in error_str:
@@ -55,3 +56,11 @@ for model in test_models:
 print("\n" + "="*60)
 print("테스트 완료")
 print("="*60)
+
+if successful_models:
+    print(f"\n✅ 사용 가능한 모델: {len(successful_models)}개")
+    for model in successful_models:
+        print(f"   - {model}")
+    print(f"\n💡 추천: {successful_models[-1] if 'claude-3-5-sonnet' in successful_models[-1] else successful_models[0]}")
+else:
+    print("\n❌ 사용 가능한 모델이 없습니다. API 키를 확인하세요.")
