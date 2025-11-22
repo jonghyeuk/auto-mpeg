@@ -17,6 +17,7 @@ sys.path.insert(0, str(project_root))
 
 from app import config
 from app.modules.ppt_parser import PPTParser, convert_pptx_to_images
+from app.modules.pdf_parser import PDFParser
 from app.modules.script_generator import ScriptGenerator
 from app.modules.tts_client import TTSClient
 from app.modules.ffmpeg_renderer import FFmpegRenderer
@@ -519,41 +520,52 @@ class GradioUI:
             audio_meta_json = config.META_DIR / "audio_meta.json"
             final_video = config.OUTPUT_DIR / f"{output_name}.mp4"
 
-            # ===== STEP 1: PPT 파싱 =====
-            progress(0.05, desc="PPT 파싱 중...")
+            # ===== STEP 1: 파일 파싱 (PPT/PDF) =====
+            file_ext = pptx_path.suffix.lower()
+            file_type = "PDF" if file_ext == ".pdf" else "PPT"
+
+            progress(0.05, desc=f"{file_type} 파싱 중...")
             log_output = self.log("", log_output)
             log_output = self.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", log_output)
-            log_output = self.log("📄 STEP 1: PPT 파싱", log_output)
+            log_output = self.log(f"📄 STEP 1: {file_type} 파싱", log_output)
             log_output = self.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", log_output)
             log_output = self.log("", log_output)
             yield log_output, None
 
-            parser = PPTParser(str(pptx_path))
-            slides = parser.parse(slides_json, config.SLIDES_IMG_DIR)
+            # 파일 확장자에 따라 적절한 Parser 선택
+            if file_ext == ".pdf":
+                # PDF 파일 처리
+                parser = PDFParser(str(pptx_path))
+                slides = parser.parse(slides_json, config.SLIDES_IMG_DIR)
+                log_output = self.log(f"✅ PDF 파싱 완료: {len(slides)}개 페이지", log_output)
+            else:
+                # PPTX 파일 처리
+                parser = PPTParser(str(pptx_path))
+                slides = parser.parse(slides_json, config.SLIDES_IMG_DIR)
+                log_output = self.log(f"✅ PPT 파싱 완료: {len(slides)}개 슬라이드", log_output)
 
-            log_output = self.log(f"✅ PPT 파싱 완료: {len(slides)}개 슬라이드", log_output)
             log_output = self.log("", log_output)
             yield log_output, None
 
-            # PPT → 이미지 변환
-            progress(0.1, desc="PPT → 이미지 변환 중...")
-            log_output = self.log("🖼️  PPT → PNG 이미지 변환 중...", log_output)
-            yield log_output, None
-
-            try:
-                convert_pptx_to_images(pptx_path, config.SLIDES_IMG_DIR)
-                log_output = self.log("✅ 이미지 변환 완료", log_output)
-            except Exception as e:
-                log_output = self.log(f"⚠️  이미지 변환 실패: {str(e)}", log_output)
-                log_output = self.log("", log_output)
-                log_output = self.log("💡 해결 방법:", log_output)
-                log_output = self.log("  1. LibreOffice를 설치하세요", log_output)
-                log_output = self.log("     https://www.libreoffice.org/download/download/", log_output)
-                log_output = self.log("  2. 또는 PowerPoint에서 각 슬라이드를 PNG로 수동 저장", log_output)
-                log_output = self.log(f"     저장 위치: {config.SLIDES_IMG_DIR}", log_output)
-                log_output = self.log("     파일명: slide_001.png, slide_002.png, ...", log_output)
+            # PPT → 이미지 변환 (PPTX만 해당)
+            if file_ext == ".pptx":
+                progress(0.1, desc="PPT → 이미지 변환 중...")
+                log_output = self.log("🖼️  PPT → PNG 이미지 변환 중...", log_output)
                 yield log_output, None
-                return
+
+                try:
+                    convert_pptx_to_images(pptx_path, config.SLIDES_IMG_DIR)
+                    log_output = self.log("✅ 이미지 변환 완료", log_output)
+                except Exception as e:
+                    log_output = self.log(f"⚠️  이미지 변환 실패: {str(e)}", log_output)
+                    log_output = self.log("", log_output)
+                    log_output = self.log("💡 해결 방법:", log_output)
+                    log_output = self.log("  1. LibreOffice를 설치하세요", log_output)
+                    log_output = self.log("     https://www.libreoffice.org/download/download/", log_output)
+                    yield log_output, None
+            else:
+                # PDF는 이미 파싱 단계에서 이미지로 변환됨
+                log_output = self.log("✅ PDF는 이미 이미지로 변환됨", log_output)
 
             log_output = self.log("", log_output)
             yield log_output, None
@@ -752,8 +764,8 @@ class GradioUI:
                     gr.Markdown("### 📤 입력 설정")
 
                     pptx_input = gr.File(
-                        label="PPT 파일 업로드",
-                        file_types=[".pptx"],
+                        label="PPT/PDF 파일 업로드",
+                        file_types=[".pptx", ".pdf"],
                         type="filepath"
                     )
 
