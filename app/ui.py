@@ -290,6 +290,11 @@ class GradioUI:
         try:
             client = Anthropic(api_key=config.ANTHROPIC_API_KEY)
 
+            # 슬라이드 위치 정보
+            is_first_slide = (slide_num == 1)
+            is_last_slide = (slide_num == total_slides)
+            position_info = "첫 번째 슬라이드" if is_first_slide else f"{slide_num}번째 슬라이드 (중간 내용)"
+
             prompt = f"""당신은 학생들을 가르치는 친절한 **강사**입니다.
 다음 슬라이드를 보면서 학생들에게 내용을 **가르쳐주세요**.
 단순히 텍스트를 읽는 것이 아니라, 강의실에서 학생들 앞에 서서
@@ -297,6 +302,9 @@ class GradioUI:
 
 【전체 프레젠테이션 맥락】
 {context}
+
+【현재 위치】
+이것은 전체 {total_slides}개 슬라이드 중 {position_info}입니다.
 
 【이 슬라이드 정보】
 제목: {slide.get('title', '')}
@@ -319,7 +327,12 @@ class GradioUI:
    - "~입니다", "~이에요", "~죠?" 같은 자연스러운 어미
    - 강의실에서 실제로 말하는 것처럼
 
-4. ⏱️ **정확히 {target_duration}초 분량**으로 작성
+4. ❌ **연속 강의이므로 반복 표현 금지**
+   {'- 이 슬라이드는 강의의 시작입니다. "오늘은", "안녕하세요" 같은 인사말을 사용하세요' if is_first_slide else '- 이미 강의가 진행 중입니다. "오늘은", "자 그럼", "이번에는" 같은 반복적인 시작 표현을 쓰지 마세요'}
+   {'- 강의를 마무리하는 표현 사용 (예: "지금까지", "이상으로")' if is_last_slide else '- 바로 이전 슬라이드에서 이어지는 내용처럼 자연스럽게 연결하세요'}
+   - 매 슬라이드마다 똑같은 패턴으로 시작하지 마세요
+
+5. ⏱️ **정확히 {target_duration}초 분량**으로 작성
    - 한국어 TTS: 1초당 약 3-4글자
    - 목표: 약 {int(target_duration * 3.5)}자 내외
 
@@ -675,7 +688,7 @@ class GradioUI:
                 fps=config.VIDEO_FPS,
                 preset=config.FFMPEG_PRESET,
                 crf=config.FFMPEG_CRF,
-                enable_ken_burns=True,  # Ken Burns 효과 (확대/이동)
+                enable_ken_burns=False,  # Ken Burns 효과 OFF (사용자 요청)
                 enable_transitions=True,  # Fade 전환 효과
                 enable_progress_bar=True,  # 진행도 바
                 enable_underline_animation=True,  # 밑줄 애니메이션
