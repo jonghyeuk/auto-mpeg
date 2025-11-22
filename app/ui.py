@@ -674,7 +674,12 @@ class GradioUI:
                 height=height,
                 fps=config.VIDEO_FPS,
                 preset=config.FFMPEG_PRESET,
-                crf=config.FFMPEG_CRF
+                crf=config.FFMPEG_CRF,
+                enable_ken_burns=True,  # Ken Burns 효과 (확대/이동)
+                enable_transitions=True,  # Fade 전환 효과
+                enable_progress_bar=True,  # 진행도 바
+                enable_underline_animation=True,  # 밑줄 애니메이션
+                enable_typing_effect=False  # 타이핑 효과 (렌더링 무거움, 옵션)
             )
 
             success = renderer.render_video(
