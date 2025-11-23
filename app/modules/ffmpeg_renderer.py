@@ -41,36 +41,54 @@ class FFmpegRenderer:
         audio_path: Path,
         duration: float,
         output_path: Path,
-        keywords: Optional[List[Dict[str, Any]]] = None,
-        enable_text_animation: bool = False
+        keyword_overlays: Optional[List[Dict[str, Any]]] = None,
+        enable_keyword_marking: bool = False
     ) -> bool:
         """
-        단일 슬라이드 클립 생성 (이미지 + 오디오 + 텍스트 애니메이션)
+        단일 슬라이드 클립 생성 (이미지 + 오디오 + 키워드 마킹 오버레이)
 
         Args:
             image_path: 슬라이드 이미지 경로
             audio_path: 오디오 파일 경로
             duration: 영상 길이 (초)
             output_path: 출력 영상 경로
-            keywords: 텍스트 애니메이션용 키워드 리스트 [{"text": "...", "timing": 2.5}, ...]
-            enable_text_animation: 텍스트 애니메이션 사용 여부
+            keyword_overlays: 키워드 오버레이 리스트 [{"overlay_image": "path", "timing": 2.5, "found": True}, ...]
+            enable_keyword_marking: 키워드 마킹 사용 여부
 
         Returns:
             성공 여부
         """
         try:
-            # 기본 비디오 필터 (스케일 및 패딩)
-            vf_filters = [f"scale={self.width}:{self.height}:force_original_aspect_ratio=decrease,pad={self.width}:{self.height}:(ow-iw)/2:(oh-ih)/2"]
+            # 기본 FFmpeg 명령 시작
+            cmd = [
+                "ffmpeg",
+                "-y",  # 덮어쓰기
+                "-loop", "1",  # 이미지 루프
+                "-i", str(image_path),  # 입력 이미지 (input 0)
+            ]
 
-            # 텍스트 애니메이션 추가
-            if enable_text_animation and keywords:
-                font_path = get_font_path_with_fallback()
-                # Windows 경로를 FFmpeg 형식으로 변환 (역슬래시 → 슬래시, 콜론 이스케이프)
-                font_path_escaped = font_path.replace('\\', '/').replace(':', '\\:')
+            # 오버레이 이미지 입력 추가
+            overlay_inputs = []
+            if enable_keyword_marking and keyword_overlays:
+                for overlay_info in keyword_overlays:
+                    if overlay_info.get("found") and overlay_info.get("overlay_image"):
+                        overlay_path = overlay_info["overlay_image"]
+                        if Path(overlay_path).exists():
+                            cmd.extend(["-loop", "1", "-i", str(overlay_path)])
+                            overlay_inputs.append(overlay_info)
 
-                for kw in keywords:
-                    text = kw.get("text", "")
-                    timing = kw.get("timing", 0)
+            # 오디오 입력
+            cmd.extend(["-i", str(audio_path)])  # 마지막 입력은 오디오
+
+            # 필터 복잡성 구성
+            if overlay_inputs:
+                # 기본 스케일 및 패딩 필터
+                filter_complex = f"[0:v]scale={self.width}:{self.height}:force_original_aspect_ratio=decrease,pad={self.width}:{self.height}:(ow-iw)/2:(oh-ih)/2[base]"
+
+                # 각 오버레이에 대해 overlay 필터 추가
+                prev_label = "base"
+                for i, overlay_info in enumerate(overlay_inputs):
+                    timing = overlay_info.get("timing", 0)
 
                     # 애니메이션 타이밍
                     fade_in_start = max(0, timing - 0.5)
@@ -78,35 +96,35 @@ class FFmpegRenderer:
                     fade_out_start = timing + 2.0
                     fade_out_end = timing + 2.5
 
-                    # 텍스트 이스케이프 (FFmpeg drawtext용)
-                    text_escaped = text.replace("'", "'\\\\\\''").replace(":", "\\:")
+                    # 알파 블렌딩 표현식 (fade in/out)
+                    alpha_expr = f"if(lt(t,{fade_in_end}),(t-{fade_in_start})/0.5,if(lt(t,{fade_out_start}),1,({fade_out_end}-t)/0.5))"
 
-                    # drawtext 필터
-                    drawtext_filter = (
-                        f"drawtext="
-                        f"text='{text_escaped}':"
-                        f"fontfile='{font_path_escaped}':"
-                        f"fontsize=80:"
-                        f"fontcolor=white:"
-                        f"borderw=3:"
-                        f"bordercolor=black:"
-                        f"x=(w-text_w)/2:"
-                        f"y=h-150:"  # 화면 하단에서 150px 위
-                        f"enable='between(t,{fade_in_start},{fade_out_end})':"
-                        f"alpha='if(lt(t,{fade_in_end}),(t-{fade_in_start})/0.5,if(lt(t,{fade_out_start}),1,({fade_out_end}-t)/0.5))'"
-                    )
+                    # 오버레이 입력 인덱스 (input 0은 base 이미지, input 1부터 오버레이)
+                    overlay_idx = i + 1
 
-                    vf_filters.append(drawtext_filter)
+                    # 출력 레이블
+                    if i == len(overlay_inputs) - 1:
+                        # 마지막 오버레이
+                        out_label = "out"
+                    else:
+                        out_label = f"tmp{i}"
 
-            # 모든 필터를 ","로 연결
-            vf_string = ",".join(vf_filters)
+                    # overlay 필터 추가
+                    filter_complex += f";[{prev_label}][{overlay_idx}:v]overlay=enable='between(t,{fade_in_start},{fade_out_end})':format=auto:eval=frame,format=yuv420p[{out_label}]"
 
-            cmd = [
-                "ffmpeg",
-                "-y",  # 덮어쓰기
-                "-loop", "1",  # 이미지 루프
-                "-i", str(image_path),  # 입력 이미지
-                "-i", str(audio_path),  # 입력 오디오
+                    prev_label = out_label
+
+                # filter_complex 추가
+                cmd.extend(["-filter_complex", filter_complex])
+                cmd.extend(["-map", "[out]"])  # 비디오 출력 매핑
+                cmd.extend(["-map", f"{len(overlay_inputs) + 1}:a"])  # 오디오 출력 매핑 (마지막 입력)
+            else:
+                # 오버레이 없으면 기본 비디오 필터만 사용
+                vf_string = f"scale={self.width}:{self.height}:force_original_aspect_ratio=decrease,pad={self.width}:{self.height}:(ow-iw)/2:(oh-ih)/2"
+                cmd.extend(["-vf", vf_string])
+
+            # 공통 인코딩 옵션
+            cmd.extend([
                 "-c:v", "libx264",  # 비디오 코덱
                 "-preset", self.preset,  # 인코딩 속도
                 "-crf", str(self.crf),  # 품질
@@ -114,11 +132,10 @@ class FFmpegRenderer:
                 "-b:a", "192k",  # 오디오 비트레이트
                 "-ar", "44100",  # 샘플레이트
                 "-pix_fmt", "yuv420p",  # 픽셀 포맷
-                "-vf", vf_string,  # 비디오 필터
                 "-t", str(duration),  # 영상 길이
                 "-shortest",  # 짧은 입력에 맞춤
                 str(output_path)
-            ]
+            ])
 
             result = subprocess.run(
                 cmd,
@@ -191,7 +208,7 @@ class FFmpegRenderer:
         clips_dir: Path,
         output_video_path: Path,
         scripts_json_path: Optional[Path] = None,
-        enable_text_animation: bool = False
+        enable_keyword_marking: bool = False
     ) -> bool:
         """
         전체 영상 렌더링
@@ -203,8 +220,8 @@ class FFmpegRenderer:
             audio_dir: 오디오 디렉토리
             clips_dir: 클립 임시 디렉토리
             output_video_path: 최종 출력 영상 경로
-            scripts_json_path: 대본 정보 JSON (키워드 포함)
-            enable_text_animation: 텍스트 애니메이션 사용 여부
+            scripts_json_path: 대본 정보 JSON (키워드 오버레이 포함)
+            enable_keyword_marking: 키워드 마킹 사용 여부
 
         Returns:
             성공 여부
@@ -216,7 +233,7 @@ class FFmpegRenderer:
         with open(audio_meta_path, 'r', encoding='utf-8') as f:
             audio_meta = json.load(f)
 
-        # 대본 데이터 로드 (키워드 포함)
+        # 대본 데이터 로드 (키워드 오버레이 포함)
         scripts_data = {}
         if scripts_json_path and scripts_json_path.exists():
             with open(scripts_json_path, 'r', encoding='utf-8') as f:
@@ -251,12 +268,13 @@ class FFmpegRenderer:
 
             print(f"  슬라이드 {index}: 클립 생성 중...")
 
-            # 키워드 가져오기
-            keywords = []
-            if enable_text_animation and index in scripts_data:
-                keywords = scripts_data[index].get("keywords", [])
-                if keywords:
-                    print(f"    → 키워드 {len(keywords)}개 애니메이션 추가")
+            # 키워드 오버레이 가져오기
+            keyword_overlays = []
+            if enable_keyword_marking and index in scripts_data:
+                keyword_overlays = scripts_data[index].get("keyword_overlays", [])
+                if keyword_overlays:
+                    found_count = sum(1 for kw in keyword_overlays if kw.get("found"))
+                    print(f"    → 키워드 마킹 {found_count}/{len(keyword_overlays)}개 추가")
 
             # 클립 생성
             success = self.create_slide_clip(
@@ -264,8 +282,8 @@ class FFmpegRenderer:
                 audio_path,
                 audio_info["duration"],
                 clip_path,
-                keywords=keywords,
-                enable_text_animation=enable_text_animation
+                keyword_overlays=keyword_overlays,
+                enable_keyword_marking=enable_keyword_marking
             )
 
             if success:

@@ -21,6 +21,7 @@ from app.modules.pdf_parser import PDFParser
 from app.modules.script_generator import ScriptGenerator
 from app.modules.tts_client import TTSClient
 from app.modules.ffmpeg_renderer import FFmpegRenderer
+from app.modules.keyword_marker import KeywordMarker
 
 
 class GradioUI:
@@ -264,12 +265,17 @@ class GradioUI:
             log_output = self.log("", log_output)
             return "", log_output
 
-    def generate_script_with_thinking(self, slide, context, slide_num, total_slides, target_duration, progress, log_output):
+    def generate_script_with_thinking(self, slide, context, slide_num, total_slides, target_duration, progress, log_output,
+                                     slide_image_path=None, pdf_path=None, page_num=None, enable_keyword_marking=True):
         """
         개별 슬라이드 대본 생성 (사고 과정 포함)
 
         Args:
             target_duration: 이 슬라이드의 목표 시간 (초)
+            slide_image_path: 슬라이드 이미지 경로 (키워드 마킹용)
+            pdf_path: PDF 파일 경로 (PDF인 경우)
+            page_num: 페이지 번호 (0부터 시작)
+            enable_keyword_marking: 키워드 마킹 활성화 여부
         """
         from anthropic import Anthropic
 
@@ -438,7 +444,41 @@ class GradioUI:
 
             log_output = self.log("", log_output)
 
-            return script, keywords, log_output
+            # 키워드 마킹 수행
+            keyword_overlays = []
+            if enable_keyword_marking and keywords and slide_image_path:
+                try:
+                    log_output = self.log("🎯 키워드 마킹 시작:", log_output)
+
+                    # KeywordMarker 초기화 (OCR 사용)
+                    marker = KeywordMarker(use_ocr=True)
+
+                    # 마킹 결과 저장 디렉토리
+                    overlay_dir = config.META_DIR / f"overlays_slide_{slide_num:03d}"
+
+                    # 키워드 마킹 수행
+                    keyword_overlays = marker.mark_keywords_on_slide(
+                        slide_image_path=str(slide_image_path),
+                        keywords=keywords,
+                        output_dir=overlay_dir,
+                        pdf_path=pdf_path,
+                        page_num=page_num,
+                        mark_style="circle",  # 또는 "underline"
+                        create_overlay=True  # 투명 오버레이 생성
+                    )
+
+                    # 결과 로깅
+                    found_count = sum(1 for kw in keyword_overlays if kw.get("found"))
+                    log_output = self.log(f"  ✓ 키워드 마킹 완료: {found_count}/{len(keywords)}개 찾음", log_output)
+                    log_output = self.log("", log_output)
+
+                except Exception as e:
+                    log_output = self.log(f"  ⚠️  키워드 마킹 실패: {str(e)}", log_output)
+                    log_output = self.log("  → 키워드 마킹 없이 진행합니다", log_output)
+                    log_output = self.log("", log_output)
+                    keyword_overlays = []
+
+            return script, keywords, keyword_overlays, log_output
 
         except Exception as e:
             log_output = self.log(f"❌ 대본 생성 실패: {str(e)}", log_output)
@@ -451,7 +491,7 @@ class GradioUI:
             log_output = self.log(f"⚠️  경고: 폴백 대본 사용 (PPT 원문)", log_output)
             log_output = self.log(f"→ {fallback_script[:50]}...", log_output)
             log_output = self.log("", log_output)
-            return fallback_script, [], log_output
+            return fallback_script, [], [], log_output
 
     def convert_ppt_to_video(
         self,
@@ -537,11 +577,13 @@ class GradioUI:
                 # PDF 파일 처리
                 parser = PDFParser(str(pptx_path))
                 slides = parser.parse(slides_json, config.SLIDES_IMG_DIR)
+                self.current_pdf_path = str(pptx_path)  # 키워드 마킹용 PDF 경로 저장
                 log_output = self.log(f"✅ PDF 파싱 완료: {len(slides)}개 페이지", log_output)
             else:
                 # PPTX 파일 처리
                 parser = PPTParser(str(pptx_path))
                 slides = parser.parse(slides_json, config.SLIDES_IMG_DIR)
+                self.current_pdf_path = None  # PPT는 PDF 경로 없음
                 log_output = self.log(f"✅ PPT 파싱 완료: {len(slides)}개 슬라이드", log_output)
 
             log_output = self.log("", log_output)
@@ -601,20 +643,33 @@ class GradioUI:
                 progress_pct = 0.2 + (0.4 * (i + 1) / len(slides))
                 progress(progress_pct, desc=f"대본 생성 중... ({i+1}/{len(slides)})")
 
-                script, keywords, log_output = self.generate_script_with_thinking(
+                # 슬라이드 이미지 경로 (키워드 마킹용)
+                slide_image_path = config.SLIDES_IMG_DIR / f"slide_{slide['index']:03d}.png"
+
+                # PDF 파일 정보 (PDF인 경우)
+                pdf_file_path = None
+                if hasattr(self, 'current_pdf_path'):
+                    pdf_file_path = self.current_pdf_path
+
+                script, keywords, keyword_overlays, log_output = self.generate_script_with_thinking(
                     slide,
                     context_analysis,
                     i + 1,
                     len(slides),
                     slides_per_duration,  # 각 슬라이드 목표 시간
                     progress,
-                    log_output
+                    log_output,
+                    slide_image_path=slide_image_path if slide_image_path.exists() else None,
+                    pdf_path=pdf_file_path,
+                    page_num=i,  # 0부터 시작
+                    enable_keyword_marking=enable_text_animation  # UI의 텍스트 애니메이션 옵션 사용
                 )
 
                 scripts_data.append({
                     "index": slide["index"],
                     "script": script,
-                    "keywords": keywords  # 텍스트 애니메이션용 키워드
+                    "keywords": keywords,  # 기존 키워드 (호환성 유지)
+                    "keyword_overlays": keyword_overlays  # 새로운 키워드 오버레이
                 })
 
                 yield log_output, None
@@ -685,7 +740,7 @@ class GradioUI:
                 config.CLIPS_DIR,
                 final_video,
                 scripts_json_path=scripts_json,
-                enable_text_animation=enable_text_animation
+                enable_keyword_marking=enable_text_animation  # 키워드 마킹 활성화
             )
 
             if not success:
