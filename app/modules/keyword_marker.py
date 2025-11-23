@@ -273,12 +273,18 @@ class KeywordMarker:
             overlay = np.zeros((image_height, image_width, 4), dtype=np.uint8)
 
             x0, y0, x1, y1 = bbox
+            original_bbox = (x0, y0, x1, y1)
 
             # bbox를 이미지 해상도 내로 클리핑 (경계를 벗어나지 않도록)
             x0 = max(0, min(x0, image_width))
             y0 = max(0, min(y0, image_height))
             x1 = max(0, min(x1, image_width))
             y1 = max(0, min(y1, image_height))
+
+            # 클리핑 후 bbox가 유효한지 확인
+            if x0 >= x1 or y0 >= y1:
+                print(f"⚠️  클리핑 후 bbox 무효: {original_bbox} → ({x0}, {y0}, {x1}, {y1})")
+                return False
 
             if mark_style == "circle":
                 # 타원 그리기
@@ -379,20 +385,36 @@ class KeywordMarker:
                     scale_x = img_width / pdf_width
                     scale_y = img_height / pdf_height
 
+                    print(f"    📊 PDF bbox: {bbox}")
+                    print(f"    📐 PDF 크기: {pdf_width}x{pdf_height}, 이미지 크기: {img_width}x{img_height}")
+                    print(f"    🔢 스케일: X={scale_x:.2f}, Y={scale_y:.2f}")
+
+                    # PDF 좌표계 → 이미지 좌표계 변환
+                    # PDF는 왼쪽 아래(0,0) 원점, 이미지는 왼쪽 위(0,0) 원점
+                    # Y축을 뒤집어야 함!
                     bbox = (
                         bbox[0] * scale_x,
-                        bbox[1] * scale_y,
+                        (pdf_height - bbox[3]) * scale_y,  # Y축 뒤집기 (bottom → top)
                         bbox[2] * scale_x,
-                        bbox[3] * scale_y
+                        (pdf_height - bbox[1]) * scale_y   # Y축 뒤집기 (top → bottom)
                     )
+                    print(f"    ✅ 변환된 bbox: {bbox}")
 
             # OCR로 찾기 (PDF에서 못 찾았거나 PPT인 경우)
             # 캐시된 OCR 결과 사용 (1회만 실행)
             if bbox is None and ocr_cache is not None:
                 bbox = self._find_keyword_in_ocr_results(keyword_text, ocr_cache)
+                if bbox:
+                    print(f"    📊 OCR bbox: {bbox}")
 
             # 마킹하기
             if bbox:
+                # bbox 유효성 검증
+                x0, y0, x1, y1 = bbox
+                if x0 < 0 or y0 < 0 or x1 > img_width or y1 > img_height or x0 >= x1 or y0 >= y1:
+                    print(f"    ⚠️  bbox 범위 초과 또는 잘못됨: {bbox} (이미지: {img_width}x{img_height})")
+                    print(f"    → 클리핑 적용")
+
                 if create_overlay:
                     # 투명 오버레이 생성 (FFmpeg용)
                     # 한글 파일명 문제 방지를 위해 인덱스 기반 파일명 사용
