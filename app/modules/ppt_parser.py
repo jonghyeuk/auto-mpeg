@@ -218,7 +218,13 @@ def convert_pptx_to_images(pptx_path: Path, output_dir: Path) -> None:
 
             print(f"  - {page_count}개 페이지 발견")
 
-            # 각 페이지를 개별 PNG로 저장
+            # 각 페이지를 개별 PNG로 저장 (스케일+패딩 적용)
+            import cv2
+            import numpy as np
+
+            target_width = 1920
+            target_height = 1080
+
             for page_num in range(page_count):
                 page = pdf_document[page_num]
 
@@ -226,11 +232,39 @@ def convert_pptx_to_images(pptx_path: Path, output_dir: Path) -> None:
                 mat = fitz.Matrix(150/72, 150/72)  # 72 DPI -> 150 DPI
                 pix = page.get_pixmap(matrix=mat)
 
+                # NumPy 배열로 변환
+                img_data = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
+
+                # RGB로 변환 (RGBA인 경우)
+                if pix.n == 4:
+                    img = cv2.cvtColor(img_data, cv2.COLOR_RGBA2BGR)
+                else:
+                    img = cv2.cvtColor(img_data, cv2.COLOR_RGB2BGR)
+
+                # 원본 크기
+                orig_height, orig_width = img.shape[:2]
+
+                # 비율 유지하면서 목표 크기에 맞추기
+                scale = min(target_width / orig_width, target_height / orig_height)
+                new_width = int(orig_width * scale)
+                new_height = int(orig_height * scale)
+
+                # 리사이즈
+                resized = cv2.resize(img, (new_width, new_height), interpolation=cv2.INTER_AREA)
+
+                # 중앙 정렬을 위한 패딩 계산
+                pad_x = (target_width - new_width) // 2
+                pad_y = (target_height - new_height) // 2
+
+                # 검은색 배경에 이미지 배치 (1920x1080 보장)
+                result = np.zeros((target_height, target_width, 3), dtype=np.uint8)
+                result[pad_y:pad_y+new_height, pad_x:pad_x+new_width] = resized
+
                 # PNG로 저장
                 output_path = output_dir / f"slide_{page_num + 1:03d}.png"
-                pix.save(str(output_path))
+                cv2.imwrite(str(output_path), result)
 
-                print(f"  - 슬라이드 {page_num + 1} 저장: {output_path.name}")
+                print(f"  - 슬라이드 {page_num + 1} 저장: {output_path.name} (원본: {orig_width}x{orig_height} → {target_width}x{target_height})")
 
             pdf_document.close()
 
