@@ -49,36 +49,39 @@ class KeywordMarker:
             # 페이지의 모든 단어와 bbox 가져오기
             words = page.get_text("words")  # [(x0, y0, x1, y1, "word", block_no, line_no, word_no)]
 
-            # 키워드와 매칭되는 단어 찾기 (부분 매칭 허용)
-            keyword_lower = keyword.lower().strip()
+            # 키워드 정규화 (띄어쓰기 제거, 소문자 변환)
+            keyword_normalized = keyword.lower().strip().replace(" ", "")
 
+            # 단일 단어 매칭
             for word_info in words:
                 word = word_info[4].lower().strip()
+                word_normalized = word.replace(" ", "")
 
-                # 완전 매칭 또는 포함 관계
-                if keyword_lower == word or keyword_lower in word or word in keyword_lower:
+                # 정규화된 버전으로 비교 (띄어쓰기 무시)
+                if keyword_normalized == word_normalized or keyword_normalized in word_normalized or word_normalized in keyword_normalized:
                     doc.close()
                     return (word_info[0], word_info[1], word_info[2], word_info[3])
 
-            # 여러 단어로 구성된 키워드 처리 (예: "머신 러닝")
-            if ' ' in keyword_lower:
-                keyword_parts = keyword_lower.split()
-                for i in range(len(words) - len(keyword_parts) + 1):
-                    matched = True
-                    for j, part in enumerate(keyword_parts):
-                        word = words[i + j][4].lower().strip()
-                        if part not in word and word not in part:
-                            matched = False
-                            break
+            # 여러 단어 연속 매칭 (슬라이딩 윈도우)
+            # "공정 장비 원리"를 찾기 위해 연속된 단어들 확인
+            max_window = 10  # 최대 10개 단어까지 윈도우
+            for window_size in range(1, min(max_window + 1, len(words) + 1)):
+                for i in range(len(words) - window_size + 1):
+                    # 윈도우 내 모든 단어 합치기
+                    window_words = [words[i + j][4] for j in range(window_size)]
+                    combined_text = "".join(window_words).lower().replace(" ", "")
 
-                    if matched:
-                        # 여러 단어의 bbox를 하나로 합치기
-                        x0 = min(words[i + j][0] for j in range(len(keyword_parts)))
-                        y0 = min(words[i + j][1] for j in range(len(keyword_parts)))
-                        x1 = max(words[i + j][2] for j in range(len(keyword_parts)))
-                        y1 = max(words[i + j][3] for j in range(len(keyword_parts)))
-                        doc.close()
-                        return (x0, y0, x1, y1)
+                    # 정규화된 키워드가 포함되어 있는지 확인
+                    if keyword_normalized in combined_text or combined_text in keyword_normalized:
+                        # 유사도 확인 (너무 긴 텍스트는 제외)
+                        if len(combined_text) < len(keyword_normalized) * 3:  # 최대 3배까지 허용
+                            # 여러 단어의 bbox를 하나로 합치기
+                            x0 = min(words[i + j][0] for j in range(window_size))
+                            y0 = min(words[i + j][1] for j in range(window_size))
+                            x1 = max(words[i + j][2] for j in range(window_size))
+                            y1 = max(words[i + j][3] for j in range(window_size))
+                            doc.close()
+                            return (x0, y0, x1, y1)
 
             doc.close()
             return None
@@ -106,20 +109,47 @@ class KeywordMarker:
             # OCR 수행
             results = self.ocr_reader.readtext(image_path)
 
-            # 키워드와 매칭되는 텍스트 찾기
-            keyword_lower = keyword.lower().strip()
+            # 키워드 정규화 (띄어쓰기 제거, 소문자 변환)
+            keyword_normalized = keyword.lower().strip().replace(" ", "")
 
+            # 단일 텍스트 매칭
             for (bbox, text, confidence) in results:
-                text_lower = text.lower().strip()
+                if confidence < 0.3:  # 신뢰도가 너무 낮으면 스킵
+                    continue
 
-                # 완전 매칭 또는 포함 관계 (신뢰도 0.3 이상)
-                if confidence > 0.3 and (keyword_lower == text_lower or keyword_lower in text_lower or text_lower in keyword_lower):
+                text_normalized = text.lower().strip().replace(" ", "")
+
+                # 정규화된 버전으로 비교 (띄어쓰기 무시)
+                if keyword_normalized == text_normalized or keyword_normalized in text_normalized or text_normalized in keyword_normalized:
                     # bbox는 [[x0, y0], [x1, y0], [x1, y1], [x0, y1]] 형식
                     x0 = int(min(point[0] for point in bbox))
                     y0 = int(min(point[1] for point in bbox))
                     x1 = int(max(point[0] for point in bbox))
                     y1 = int(max(point[1] for point in bbox))
                     return (x0, y0, x1, y1)
+
+            # 여러 텍스트 연속 매칭 (인접한 텍스트 블록 결합)
+            max_window = 10
+            for window_size in range(1, min(max_window + 1, len(results) + 1)):
+                for i in range(len(results) - window_size + 1):
+                    # 윈도우 내 모든 텍스트 합치기
+                    window_texts = [results[i + j][1] for j in range(window_size)]
+                    combined_text = "".join(window_texts).lower().replace(" ", "")
+
+                    # 정규화된 키워드가 포함되어 있는지 확인
+                    if keyword_normalized in combined_text or combined_text in keyword_normalized:
+                        # 유사도 확인 (너무 긴 텍스트는 제외)
+                        if len(combined_text) < len(keyword_normalized) * 3:
+                            # 여러 bbox를 하나로 합치기
+                            all_points = []
+                            for j in range(window_size):
+                                all_points.extend(results[i + j][0])
+
+                            x0 = int(min(point[0] for point in all_points))
+                            y0 = int(min(point[1] for point in all_points))
+                            x1 = int(max(point[0] for point in all_points))
+                            y1 = int(max(point[1] for point in all_points))
+                            return (x0, y0, x1, y1)
 
             return None
 
