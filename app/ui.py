@@ -958,10 +958,11 @@ class GradioUI:
                     )
 
                     keyword_mark_style = gr.Radio(
-                        choices=["circle", "underline"],
-                        value="circle",
+                        choices=["random"],
+                        value="random",
                         label="마킹 스타일",
-                        info="동그라미 또는 밑줄로 키워드 표시"
+                        info="각 키워드마다 랜덤하게 동그라미 또는 밑줄로 표시",
+                        interactive=False
                     )
 
                     gr.Markdown("### 📝 자막 옵션")

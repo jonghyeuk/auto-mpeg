@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import List, Dict, Tuple, Optional
 import fitz  # PyMuPDF
 from PIL import Image, ImageDraw, ImageFont
+import random
 
 
 class KeywordMarker:
@@ -318,6 +319,9 @@ class KeywordMarker:
             keyword_text = kw.get("text", "")
             timing = kw.get("timing", 0)
 
+            # 각 키워드마다 랜덤하게 스타일 선택 (동그라미 또는 밑줄)
+            current_style = random.choice(["circle", "underline"])
+
             # 키워드 위치 찾기
             bbox = None
 
@@ -357,14 +361,14 @@ class KeywordMarker:
                     output_path = output_dir / f"overlay_{i}.png"
                     success = self.create_transparent_overlay(
                         img_width, img_height, bbox, str(output_path),
-                        mark_style=mark_style,
+                        mark_style=current_style,  # 랜덤 스타일 사용
                         color=(0, 0, 255, 255),  # BGRA - 빨간색
                         thickness=8
                     )
                 else:
                     # 직접 그리기
                     output_path = output_dir / f"marked_{i}.png"
-                    if mark_style == "circle":
+                    if current_style == "circle":  # 랜덤 스타일 사용
                         success = self.draw_circle_on_image(slide_image_path, bbox, str(output_path))
                     else:  # underline
                         success = self.draw_underline_on_image(slide_image_path, bbox, str(output_path))
