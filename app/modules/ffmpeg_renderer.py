@@ -70,12 +70,32 @@ class FFmpegRenderer:
             # 오버레이 이미지 입력 추가
             overlay_inputs = []
             if enable_keyword_marking and keyword_overlays:
-                for overlay_info in keyword_overlays:
+                print(f"🔍 키워드 오버레이 처리 시작 ({len(keyword_overlays)}개)")
+                for idx, overlay_info in enumerate(keyword_overlays):
+                    print(f"  [{idx}] 검사: {overlay_info.get('keyword', 'Unknown')}")
+                    print(f"      - found: {overlay_info.get('found')}")
+                    print(f"      - overlay_image: {overlay_info.get('overlay_image')}")
+
                     if overlay_info.get("found") and overlay_info.get("overlay_image"):
                         overlay_path = overlay_info["overlay_image"]
-                        if Path(overlay_path).exists():
+                        path_exists = Path(overlay_path).exists()
+                        print(f"      - 파일 존재: {path_exists}")
+
+                        if path_exists:
                             cmd.extend(["-loop", "1", "-i", str(overlay_path)])
                             overlay_inputs.append(overlay_info)
+                            print(f"      ✓ 오버레이 추가됨")
+                        else:
+                            print(f"      ✗ 파일이 존재하지 않음: {overlay_path}")
+                    else:
+                        print(f"      ✗ 스킵 (found={overlay_info.get('found')}, has_image={bool(overlay_info.get('overlay_image'))})")
+
+                print(f"🔍 최종 오버레이 개수: {len(overlay_inputs)}개")
+            else:
+                if not enable_keyword_marking:
+                    print("🔍 키워드 마킹 비활성화됨")
+                elif not keyword_overlays:
+                    print("🔍 키워드 오버레이 데이터 없음")
 
             # 오디오 입력
             cmd.extend(["-i", str(audio_path)])  # 마지막 입력은 오디오
