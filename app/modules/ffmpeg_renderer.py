@@ -156,7 +156,7 @@ class FFmpegRenderer:
         output_path: Path
     ) -> bool:
         """
-        여러 클립을 하나의 영상으로 연결
+        여러 클립을 하나의 영상으로 연결 (전환 효과 없음)
 
         Args:
             clip_paths: 클립 파일 경로 리스트
@@ -199,6 +199,128 @@ class FFmpegRenderer:
             print(f"✗ FFmpeg concat 에러: {e.stderr}")
             return False
 
+    def get_video_duration(self, video_path: Path) -> float:
+        """영상 길이 가져오기 (초)"""
+        try:
+            cmd = [
+                "ffprobe",
+                "-v", "error",
+                "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+                str(video_path)
+            ]
+
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=True
+            )
+
+            return float(result.stdout.strip())
+
+        except Exception:
+            return 0.0
+
+    def concatenate_clips_with_transition(
+        self,
+        clip_paths: List[Path],
+        output_path: Path,
+        transition: str = "fade",
+        duration: float = 0.5
+    ) -> bool:
+        """
+        여러 클립을 전환 효과와 함께 하나의 영상으로 연결
+
+        Args:
+            clip_paths: 클립 파일 경로 리스트
+            output_path: 출력 영상 경로
+            transition: 전환 효과 ("fade", "dissolve", "slide", "wipe")
+            duration: 전환 효과 길이 (초)
+
+        Returns:
+            성공 여부
+        """
+        if len(clip_paths) < 2:
+            # 클립이 1개면 전환 효과 없이 복사
+            return self.concatenate_clips(clip_paths, output_path)
+
+        try:
+            # xfade 효과 매핑
+            xfade_map = {
+                "fade": "fade",
+                "dissolve": "dissolve",
+                "slide": "slideleft",
+                "wipe": "wipeleft"
+            }
+            xfade_effect = xfade_map.get(transition, "fade")
+
+            # 각 클립의 길이 가져오기
+            clip_durations = []
+            for clip_path in clip_paths:
+                clip_duration = self.get_video_duration(clip_path)
+                clip_durations.append(clip_duration)
+
+            # FFmpeg 명령 구성
+            cmd = ["ffmpeg", "-y"]
+
+            # 모든 클립 입력
+            for clip_path in clip_paths:
+                cmd.extend(["-i", str(clip_path)])
+
+            # filter_complex 구성
+            filter_parts = []
+            prev_label = "[0:v]"
+            offset = 0.0
+
+            for i in range(len(clip_paths) - 1):
+                curr_label = f"[v{i}]" if i < len(clip_paths) - 2 else "[outv]"
+                next_input = f"[{i+1}:v]"
+
+                # offset 계산: 이전 클립들의 길이 합 - 전환 효과 길이 * 인덱스
+                if i == 0:
+                    offset = clip_durations[0] - duration
+                else:
+                    offset += clip_durations[i] - duration
+
+                # xfade 필터 추가
+                filter_parts.append(
+                    f"{prev_label}{next_input}xfade=transition={xfade_effect}:duration={duration}:offset={offset:.2f}{curr_label}"
+                )
+                prev_label = curr_label
+
+            # 오디오 연결
+            audio_inputs = "".join(f"[{i}:a]" for i in range(len(clip_paths)))
+            filter_parts.append(f"{audio_inputs}concat=n={len(clip_paths)}:v=0:a=1[outa]")
+
+            filter_complex = ";".join(filter_parts)
+
+            cmd.extend([
+                "-filter_complex", filter_complex,
+                "-map", "[outv]",
+                "-map", "[outa]",
+                "-c:v", "libx264",
+                "-preset", self.preset,
+                "-crf", str(self.crf),
+                "-c:a", "aac",
+                str(output_path)
+            ])
+
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=True
+            )
+
+            return True
+
+        except subprocess.CalledProcessError as e:
+            print(f"✗ FFmpeg xfade 에러: {e.stderr}")
+            print(f"  → 전환 효과 없이 재시도...")
+            # 실패 시 전환 효과 없이 재시도
+            return self.concatenate_clips(clip_paths, output_path)
+
     def render_video(
         self,
         slides_json_path: Path,
@@ -208,7 +330,9 @@ class FFmpegRenderer:
         clips_dir: Path,
         output_video_path: Path,
         scripts_json_path: Optional[Path] = None,
-        enable_keyword_marking: bool = False
+        enable_keyword_marking: bool = False,
+        transition_effect: str = "fade",
+        transition_duration: float = 0.5
     ) -> bool:
         """
         전체 영상 렌더링
@@ -222,6 +346,8 @@ class FFmpegRenderer:
             output_video_path: 최종 출력 영상 경로
             scripts_json_path: 대본 정보 JSON (키워드 오버레이 포함)
             enable_keyword_marking: 키워드 마킹 사용 여부
+            transition_effect: 슬라이드 전환 효과 ("none", "fade", "dissolve", "slide", "wipe")
+            transition_duration: 전환 효과 길이 (초)
 
         Returns:
             성공 여부
@@ -298,7 +424,14 @@ class FFmpegRenderer:
 
         # 클립 연결
         print(f"\n클립 연결 중: {len(clip_paths)}개 클립")
-        success = self.concatenate_clips(clip_paths, output_video_path)
+
+        if transition_effect != "none" and transition_duration > 0:
+            print(f"  - 전환 효과: {transition_effect} ({transition_duration}초)")
+            success = self.concatenate_clips_with_transition(
+                clip_paths, output_video_path, transition_effect, transition_duration
+            )
+        else:
+            success = self.concatenate_clips(clip_paths, output_video_path)
 
         if success:
             print(f"✓ 영상 렌더링 완료: {output_video_path}")

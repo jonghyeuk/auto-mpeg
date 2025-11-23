@@ -266,7 +266,7 @@ class GradioUI:
             return "", log_output
 
     def generate_script_with_thinking(self, slide, context, slide_num, total_slides, target_duration, progress, log_output,
-                                     slide_image_path=None, pdf_path=None, page_num=None, enable_keyword_marking=True):
+                                     slide_image_path=None, pdf_path=None, page_num=None, enable_keyword_marking=True, keyword_mark_style="circle"):
         """
         개별 슬라이드 대본 생성 (사고 과정 포함)
 
@@ -463,7 +463,7 @@ class GradioUI:
                         output_dir=overlay_dir,
                         pdf_path=pdf_path,
                         page_num=page_num,
-                        mark_style="circle",  # 또는 "underline"
+                        mark_style=keyword_mark_style,  # UI에서 선택한 스타일
                         create_overlay=True  # 투명 오버레이 생성
                     )
 
@@ -500,7 +500,12 @@ class GradioUI:
         voice_choice,
         resolution_choice,
         total_duration_minutes,
-        enable_text_animation,
+        enable_keyword_marking,
+        keyword_mark_style,
+        transition_effect,
+        transition_duration,
+        video_quality,
+        encoding_speed,
         progress=gr.Progress()
     ):
         """
@@ -662,7 +667,8 @@ class GradioUI:
                     slide_image_path=slide_image_path if slide_image_path.exists() else None,
                     pdf_path=pdf_file_path,
                     page_num=i,  # 0부터 시작
-                    enable_keyword_marking=enable_text_animation  # UI의 텍스트 애니메이션 옵션 사용
+                    enable_keyword_marking=enable_keyword_marking,
+                    keyword_mark_style=keyword_mark_style
                 )
 
                 scripts_data.append({
@@ -724,12 +730,24 @@ class GradioUI:
             log_output = self.log("", log_output)
             yield log_output, None
 
+            # 영상 품질 매핑 (CRF: 낮을수록 고품질)
+            quality_map = {"high": 18, "medium": 23, "low": 28}
+            crf_value = quality_map.get(video_quality, 23)
+
+            # 인코딩 속도 매핑
+            preset_value = encoding_speed  # "fast", "medium", "slow"
+
+            log_output = self.log(f"  - 영상 품질: {video_quality} (CRF: {crf_value})", log_output)
+            log_output = self.log(f"  - 인코딩 속도: {encoding_speed}", log_output)
+            log_output = self.log(f"  - 전환 효과: {transition_effect} ({transition_duration}초)", log_output)
+            log_output = self.log("", log_output)
+
             renderer = FFmpegRenderer(
                 width=width,
                 height=height,
                 fps=config.VIDEO_FPS,
-                preset=config.FFMPEG_PRESET,
-                crf=config.FFMPEG_CRF
+                preset=preset_value,
+                crf=crf_value
             )
 
             success = renderer.render_video(
@@ -740,7 +758,9 @@ class GradioUI:
                 config.CLIPS_DIR,
                 final_video,
                 scripts_json_path=scripts_json,
-                enable_keyword_marking=enable_text_animation  # 키워드 마킹 활성화
+                enable_keyword_marking=enable_keyword_marking,  # 키워드 마킹 활성화
+                transition_effect=transition_effect,
+                transition_duration=transition_duration
             )
 
             if not success:
@@ -855,10 +875,53 @@ class GradioUI:
                         info="1080p 권장"
                     )
 
-                    enable_text_animation = gr.Checkbox(
-                        label="🔤 텍스트 애니메이션 사용",
+                    gr.Markdown("### 🎯 키워드 마킹 옵션")
+
+                    enable_keyword_marking = gr.Checkbox(
+                        label="키워드 마킹 활성화",
                         value=True,
-                        info="핵심 키워드를 화면에 fade in/out 효과로 표시"
+                        info="슬라이드에서 중요 키워드를 찾아 표시"
+                    )
+
+                    keyword_mark_style = gr.Radio(
+                        choices=["circle", "underline"],
+                        value="circle",
+                        label="마킹 스타일",
+                        info="동그라미 또는 밑줄로 키워드 표시"
+                    )
+
+                    gr.Markdown("### 🎞️ 전환 효과 옵션")
+
+                    transition_effect = gr.Dropdown(
+                        choices=["none", "fade", "dissolve", "slide", "wipe"],
+                        value="fade",
+                        label="슬라이드 전환 효과",
+                        info="슬라이드 간 전환 애니메이션 (fade 추천)"
+                    )
+
+                    transition_duration = gr.Slider(
+                        minimum=0.0,
+                        maximum=2.0,
+                        value=0.5,
+                        step=0.1,
+                        label="전환 효과 길이 (초)",
+                        info="0 = 전환 없음, 0.5초 권장"
+                    )
+
+                    gr.Markdown("### ⚙️ 고급 옵션")
+
+                    video_quality = gr.Dropdown(
+                        choices=["high", "medium", "low"],
+                        value="medium",
+                        label="영상 품질",
+                        info="high = 큰 파일, low = 작은 파일"
+                    )
+
+                    encoding_speed = gr.Dropdown(
+                        choices=["fast", "medium", "slow"],
+                        value="medium",
+                        label="인코딩 속도",
+                        info="fast = 빠르지만 큰 파일, slow = 느리지만 작은 파일"
                     )
 
                     convert_btn = gr.Button("🎬 영상 생성", variant="primary", size="lg")
@@ -896,7 +959,19 @@ class GradioUI:
             # 버튼 클릭 이벤트
             convert_btn.click(
                 fn=self.convert_ppt_to_video,
-                inputs=[pptx_input, output_name, voice_choice, resolution_choice, total_duration, enable_text_animation],
+                inputs=[
+                    pptx_input,
+                    output_name,
+                    voice_choice,
+                    resolution_choice,
+                    total_duration,
+                    enable_keyword_marking,
+                    keyword_mark_style,
+                    transition_effect,
+                    transition_duration,
+                    video_quality,
+                    encoding_speed
+                ],
                 outputs=[progress_output, video_output]
             )
 
