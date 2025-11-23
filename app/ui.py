@@ -757,18 +757,25 @@ class GradioUI:
                     subtitle_file = config.META_DIR / f"{output_name}.srt"
 
                     # audio_meta에서 스크립트와 타이밍 정보 추출
+                    # start_time은 이전 슬라이드들의 duration을 누적해서 계산
                     subtitle_data = []
+                    current_time = 0.0
                     for item in audio_meta:
                         subtitle_data.append({
                             "script": item.get("script", ""),
-                            "start_time": item.get("start_time", 0.0),
+                            "start_time": current_time,
                             "duration": item.get("duration", 0.0)
                         })
+                        current_time += item.get("duration", 0.0)
 
                     success = subtitle_generator.generate_srt(subtitle_data, subtitle_file)
 
                     if success:
                         log_output = self.log(f"✅ 자막 생성 완료: {subtitle_file.name}", log_output)
+                        # 자막 데이터 통계 출력
+                        total_subtitle_chars = sum(len(item.get("script", "")) for item in subtitle_data)
+                        log_output = self.log(f"  - 슬라이드 수: {len(subtitle_data)}개", log_output)
+                        log_output = self.log(f"  - 총 글자 수: {total_subtitle_chars}자", log_output)
                     else:
                         log_output = self.log("⚠️  자막 생성 실패, 자막 없이 진행합니다", log_output)
                         subtitle_file = None

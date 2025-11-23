@@ -149,7 +149,8 @@ class TTSClient:
                 audio_info = {
                     "index": index,
                     "audio": str(audio_path.relative_to(output_meta_path.parent.parent)),
-                    "duration": round(duration, 2)
+                    "duration": round(duration, 2),
+                    "script": text  # 자막 생성용
                 }
 
                 audio_meta.append(audio_info)

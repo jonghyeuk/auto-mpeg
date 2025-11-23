@@ -366,27 +366,32 @@ class FFmpegRenderer:
             성공 여부
         """
         try:
-            # Windows 경로를 FFmpeg 형식으로 변환
-            # Windows: C:\path\file.srt -> C\:/path/file.srt
-            subtitle_path_str = str(subtitle_file).replace('\\', '/').replace(':', '\\:')
+            # Windows 경로 이스케이핑 문제 해결: 자막 파일을 비디오와 같은 디렉토리로 복사
+            temp_subtitle = input_video.parent / "temp_subtitle.srt"
+            shutil.copy(str(subtitle_file), str(temp_subtitle))
 
             # 방법 1: force_style로 한글 폰트 지정
             cmd = [
                 "ffmpeg",
                 "-i", str(input_video),
-                "-vf", f"subtitles={subtitle_path_str}:force_style='FontName=Malgun Gothic,FontSize=24,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BorderStyle=3,Outline=2,Shadow=1,MarginV=30'",
+                "-vf", f"subtitles={temp_subtitle.name}:force_style='FontName=Malgun Gothic,FontSize=24,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BorderStyle=3,Outline=2,Shadow=1,MarginV=30'",
                 "-c:a", "copy",  # 오디오는 그대로 복사
                 "-y",
                 str(output_video)
             ]
 
             try:
+                # 작업 디렉토리를 비디오 파일 위치로 변경
                 result = subprocess.run(
                     cmd,
                     capture_output=True,
                     text=True,
-                    check=True
+                    check=True,
+                    cwd=str(input_video.parent)
                 )
+                # 임시 자막 파일 삭제
+                if temp_subtitle.exists():
+                    temp_subtitle.unlink()
                 return True
 
             except subprocess.CalledProcessError as e:
@@ -396,7 +401,7 @@ class FFmpegRenderer:
                 cmd_simple = [
                     "ffmpeg",
                     "-i", str(input_video),
-                    "-vf", f"subtitles={subtitle_path_str}",
+                    "-vf", f"subtitles={temp_subtitle.name}",
                     "-c:a", "copy",
                     "-y",
                     str(output_video)
@@ -406,12 +411,25 @@ class FFmpegRenderer:
                     cmd_simple,
                     capture_output=True,
                     text=True,
-                    check=True
+                    check=True,
+                    cwd=str(input_video.parent)
                 )
+                # 임시 자막 파일 삭제
+                if temp_subtitle.exists():
+                    temp_subtitle.unlink()
                 return True
 
         except subprocess.CalledProcessError as e:
             print(f"✗ 자막 번인 에러: {e.stderr}")
+            # 임시 파일 정리
+            if 'temp_subtitle' in locals() and temp_subtitle.exists():
+                temp_subtitle.unlink()
+            return False
+        except Exception as e:
+            print(f"✗ 자막 처리 중 오류: {e}")
+            # 임시 파일 정리
+            if 'temp_subtitle' in locals() and temp_subtitle.exists():
+                temp_subtitle.unlink()
             return False
 
     def render_video(
