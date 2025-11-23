@@ -68,25 +68,61 @@ class PDFParser:
             "notes": ""  # PDF에는 노트가 없음
         }
 
-    def save_page_as_image(self, page, page_num: int, output_dir: Path) -> Path:
+    def save_page_as_image(self, page, page_num: int, output_dir: Path, target_width: int = 1920, target_height: int = 1080) -> Path:
         """
-        PDF 페이지를 PNG 이미지로 저장
+        PDF 페이지를 PNG 이미지로 저장 (목표 해상도에 맞춰 스케일+패딩)
 
         Args:
             page: PyMuPDF 페이지 객체
             page_num: 페이지 번호 (1부터 시작)
             output_dir: 출력 디렉토리
+            target_width: 목표 너비 (기본 1920)
+            target_height: 목표 높이 (기본 1080)
 
         Returns:
             저장된 이미지 파일 경로
         """
+        import cv2
+        import numpy as np
+
         # 페이지를 고해상도 이미지로 렌더링 (150 DPI)
         mat = fitz.Matrix(150/72, 150/72)  # 72 DPI -> 150 DPI
         pix = page.get_pixmap(matrix=mat)
 
+        # NumPy 배열로 변환
+        img_data = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
+
+        # RGB로 변환 (RGBA인 경우)
+        if pix.n == 4:
+            img = cv2.cvtColor(img_data, cv2.COLOR_RGBA2BGR)
+        else:
+            img = cv2.cvtColor(img_data, cv2.COLOR_RGB2BGR)
+
+        # 원본 크기
+        orig_height, orig_width = img.shape[:2]
+
+        # 비율 유지하면서 목표 크기에 맞추기
+        scale = min(target_width / orig_width, target_height / orig_height)
+        new_width = int(orig_width * scale)
+        new_height = int(orig_height * scale)
+
+        # 리사이즈
+        resized = cv2.resize(img, (new_width, new_height), interpolation=cv2.INTER_AREA)
+
+        # 중앙 정렬을 위한 패딩 계산
+        pad_x = (target_width - new_width) // 2
+        pad_y = (target_height - new_height) // 2
+
+        # 검은색 배경에 이미지 배치 (FFmpeg와 동일한 방식)
+        result = np.zeros((target_height, target_width, 3), dtype=np.uint8)
+        result[pad_y:pad_y+new_height, pad_x:pad_x+new_width] = resized
+
         # PNG로 저장
         output_path = output_dir / f"slide_{page_num:03d}.png"
-        pix.save(str(output_path))
+        cv2.imwrite(str(output_path), result)
+
+        print(f"    📐 원본: {orig_width}x{orig_height} → 스케일: {new_width}x{new_height} → 패딩: {target_width}x{target_height}")
+        print(f"    📍 오프셋: X={pad_x}, Y={pad_y}")
 
         return output_path
 

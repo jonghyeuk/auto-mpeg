@@ -381,24 +381,37 @@ class KeywordMarker:
                     pdf_height = page.rect.height
                     doc.close()
 
-                    # 좌표 스케일 변환
-                    scale_x = img_width / pdf_width
-                    scale_y = img_height / pdf_height
+                    # 렌더링 시 DPI 스케일 (150 DPI)
+                    dpi_scale = 150 / 72
+                    rendered_width = pdf_width * dpi_scale
+                    rendered_height = pdf_height * dpi_scale
+
+                    # 목표 크기에 맞춰 스케일 계산 (pdf_parser.py와 동일)
+                    scale = min(img_width / rendered_width, img_height / rendered_height)
+                    new_width = int(rendered_width * scale)
+                    new_height = int(rendered_height * scale)
+
+                    # 중앙 정렬 패딩 오프셋 (pdf_parser.py와 동일)
+                    pad_x = (img_width - new_width) // 2
+                    pad_y = (img_height - new_height) // 2
 
                     print(f"    📊 PDF bbox: {bbox}")
-                    print(f"    📐 PDF 크기: {pdf_width}x{pdf_height}, 이미지 크기: {img_width}x{img_height}")
-                    print(f"    🔢 스케일: X={scale_x:.2f}, Y={scale_y:.2f}")
+                    print(f"    📐 PDF 크기: {pdf_width:.1f}x{pdf_height:.1f}")
+                    print(f"    🖼️  렌더링 크기: {rendered_width:.1f}x{rendered_height:.1f}")
+                    print(f"    📏 스케일 후: {new_width}x{new_height}, 패딩: ({pad_x}, {pad_y})")
 
                     # PDF 좌표계 → 이미지 좌표계 변환
-                    # PDF는 왼쪽 아래(0,0) 원점, 이미지는 왼쪽 위(0,0) 원점
-                    # Y축을 뒤집어야 함!
+                    # 1. DPI 스케일 적용
+                    # 2. Y축 뒤집기 (PDF는 왼쪽 아래 원점)
+                    # 3. 스케일 적용
+                    # 4. 패딩 오프셋 추가
                     bbox = (
-                        bbox[0] * scale_x,
-                        (pdf_height - bbox[3]) * scale_y,  # Y축 뒤집기 (bottom → top)
-                        bbox[2] * scale_x,
-                        (pdf_height - bbox[1]) * scale_y   # Y축 뒤집기 (top → bottom)
+                        bbox[0] * dpi_scale * scale + pad_x,
+                        (pdf_height - bbox[3]) * dpi_scale * scale + pad_y,
+                        bbox[2] * dpi_scale * scale + pad_x,
+                        (pdf_height - bbox[1]) * dpi_scale * scale + pad_y
                     )
-                    print(f"    ✅ 변환된 bbox: {bbox}")
+                    print(f"    ✅ 변환된 bbox: ({bbox[0]:.1f}, {bbox[1]:.1f}, {bbox[2]:.1f}, {bbox[3]:.1f})")
 
             # OCR로 찾기 (PDF에서 못 찾았거나 PPT인 경우)
             # 캐시된 OCR 결과 사용 (1회만 실행)

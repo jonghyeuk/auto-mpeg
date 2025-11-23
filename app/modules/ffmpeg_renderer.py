@@ -104,8 +104,9 @@ class FFmpegRenderer:
 
             # 필터 복잡성 구성
             if overlay_inputs:
-                # 기본 스케일 및 패딩 필터
-                filter_complex = f"[0:v]scale={self.width}:{self.height}:force_original_aspect_ratio=decrease,pad={self.width}:{self.height}:(ow-iw)/2:(oh-ih)/2[base]"
+                # 이미지가 이미 목표 해상도(1920x1080)로 스케일+패딩되어 있음
+                # 추가 스케일링 없이 그대로 사용
+                filter_complex = f"[0:v]format=yuv420p[base]"
 
                 # 각 오버레이에 대해 overlay 필터 추가
                 prev_label = "base"
@@ -141,9 +142,9 @@ class FFmpegRenderer:
                 cmd.extend(["-map", "[out]"])  # 비디오 출력 매핑
                 cmd.extend(["-map", f"{len(overlay_inputs) + 1}:a"])  # 오디오 출력 매핑 (마지막 입력)
             else:
-                # 오버레이 없으면 기본 비디오 필터만 사용
-                vf_string = f"scale={self.width}:{self.height}:force_original_aspect_ratio=decrease,pad={self.width}:{self.height}:(ow-iw)/2:(oh-ih)/2"
-                cmd.extend(["-vf", vf_string])
+                # 오버레이 없음: 이미지가 이미 목표 해상도로 스케일+패딩되어 있음
+                # 포맷 변환만 수행
+                cmd.extend(["-vf", "format=yuv420p"])
 
             # 공통 인코딩 옵션
             cmd.extend([
