@@ -275,11 +275,10 @@ class KeywordMarker:
             x0, y0, x1, y1 = bbox
 
             # bbox를 이미지 해상도 내로 클리핑 (경계를 벗어나지 않도록)
-            margin = 20  # 동그라미/밑줄의 여유 공간
-            x0 = max(margin, min(x0, image_width - margin))
-            y0 = max(margin, min(y0, image_height - margin))
-            x1 = max(margin, min(x1, image_width - margin))
-            y1 = max(margin, min(y1, image_height - margin))
+            x0 = max(0, min(x0, image_width))
+            y0 = max(0, min(y0, image_height))
+            x1 = max(0, min(x1, image_width))
+            y1 = max(0, min(y1, image_height))
 
             if mark_style == "circle":
                 # 타원 그리기
@@ -288,11 +287,14 @@ class KeywordMarker:
                 width = int((x1 - x0) / 2) + 15
                 height = int((y1 - y0) / 2) + 15
 
-                # 타원이 이미지를 벗어나지 않도록 크기 제한
+                # 타원이 이미지 경계를 벗어나지 않도록 크기 제한
+                margin = 10  # 안전 마진
                 max_width = min(width, center_x - margin, image_width - center_x - margin)
                 max_height = min(height, center_y - margin, image_height - center_y - margin)
 
-                cv2.ellipse(overlay, (center_x, center_y), (max_width, max_height), 0, 0, 360, color, thickness)
+                # 크기가 유효한 경우에만 그리기
+                if max_width > 0 and max_height > 0:
+                    cv2.ellipse(overlay, (center_x, center_y), (max_width, max_height), 0, 0, 360, color, thickness)
 
             else:  # underline
                 # 밑줄 그리기

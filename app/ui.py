@@ -437,11 +437,36 @@ class GradioUI:
                 log_output = self.log("└─────────────────────────────────────────┘", log_output)
                 log_output = self.log("", log_output)
 
-            # 핵심 키워드 표시
+            # 핵심 키워드 표시 및 타이밍 자동 보정
             if keywords:
                 log_output = self.log("🔑 핵심 키워드 (텍스트 애니메이션):", log_output)
+
+                # 타이밍 자동 계산: 대본에서 키워드가 실제로 나오는 위치 기반
+                estimated_duration = len(script) / 3.5  # 예상 TTS 길이
                 for kw in keywords:
-                    log_output = self.log(f"  - {kw['text']} ({kw['timing']:.1f}초)", log_output)
+                    # 대본에서 키워드 위치 찾기
+                    keyword_text = kw['text'].strip()
+                    keyword_pos = script.find(keyword_text)
+
+                    if keyword_pos >= 0:
+                        # 키워드 위치 기반 타이밍 계산
+                        char_ratio = keyword_pos / max(len(script), 1)
+                        calculated_timing = char_ratio * estimated_duration
+
+                        # LLM이 제공한 타이밍과 비교
+                        original_timing = kw['timing']
+                        diff = abs(calculated_timing - original_timing)
+
+                        # 차이가 3초 이상이면 자동 보정
+                        if diff > 3.0:
+                            log_output = self.log(f"  - {kw['text']}: {original_timing:.1f}초 → {calculated_timing:.1f}초 (자동 보정)", log_output)
+                            kw['timing'] = calculated_timing
+                        else:
+                            log_output = self.log(f"  - {kw['text']} ({kw['timing']:.1f}초)", log_output)
+                    else:
+                        # 대본에서 찾지 못한 경우 원래 타이밍 유지
+                        log_output = self.log(f"  - {kw['text']} ({kw['timing']:.1f}초) ⚠️ 대본에서 미발견", log_output)
+
                 log_output = self.log("", log_output)
             else:
                 log_output = self.log("⚠️  키워드가 추출되지 않았습니다 (텍스트 애니메이션 없음)", log_output)
