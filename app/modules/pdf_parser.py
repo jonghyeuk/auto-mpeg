@@ -29,7 +29,28 @@ class PDFParser:
         Returns:
             제목과 본문을 포함한 딕셔너리
         """
-        text = page.get_text()
+        # 여러 방법 시도하여 한글 인코딩 문제 해결
+        text = ""
+
+        # 방법 1: blocks를 사용한 텍스트 추출 (더 안정적)
+        try:
+            blocks = page.get_text("blocks")
+            text_blocks = []
+            for block in blocks:
+                if len(block) >= 5 and block[4]:  # 텍스트 블록인 경우
+                    block_text = block[4].strip()
+                    if block_text:
+                        text_blocks.append(block_text)
+            text = "\n".join(text_blocks)
+        except Exception as e:
+            print(f"  ⚠️  blocks 추출 실패, 기본 방식 사용: {e}")
+
+        # 방법 2: 기본 방식 (폴백)
+        if not text or len(text.strip()) < 10:
+            try:
+                text = page.get_text("text")
+            except Exception:
+                text = page.get_text()
 
         # 텍스트를 줄 단위로 분리
         lines = [line.strip() for line in text.split('\n') if line.strip()]
