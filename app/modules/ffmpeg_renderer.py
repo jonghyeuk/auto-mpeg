@@ -374,7 +374,7 @@ class FFmpegRenderer:
             cmd = [
                 "ffmpeg",
                 "-i", str(input_video),
-                "-vf", f"subtitles={temp_subtitle.name}:force_style='FontName=Malgun Gothic,FontSize=24,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BorderStyle=3,Outline=2,Shadow=1,MarginV=30'",
+                "-vf", f"subtitles={temp_subtitle.name}:force_style='FontName=Malgun Gothic,FontSize=18,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BorderStyle=3,Outline=2,Shadow=1,MarginV=30'",
                 "-c:a", "copy",  # 오디오는 그대로 복사
                 "-y",
                 str(output_video)
