@@ -140,9 +140,10 @@ class FFmpegRenderer:
             # 디버그: FFmpeg 명령어 출력
             if overlay_inputs:
                 print(f"\n🔍 FFmpeg 디버그 (키워드 마킹 {len(overlay_inputs)}개):")
-                print(f"  - 오버레이 파일: {[oi['overlay_image'] for oi in overlay_inputs]}")
-                print(f"  - 타이밍: {[f\"{oi['timing']:.1f}초\" for oi in overlay_inputs]}")
-                # print(f"  - 필터: {filter_complex[:200]}...")  # 필터 앞부분만 출력
+                overlay_files = [Path(oi['overlay_image']).name for oi in overlay_inputs]
+                timings = [f"{oi['timing']:.1f}초" for oi in overlay_inputs]
+                print(f"  - 오버레이 파일: {overlay_files}")
+                print(f"  - 타이밍: {timings}")
 
             result = subprocess.run(
                 cmd,
