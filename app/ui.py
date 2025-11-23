@@ -22,6 +22,7 @@ from app.modules.script_generator import ScriptGenerator
 from app.modules.tts_client import TTSClient
 from app.modules.ffmpeg_renderer import FFmpegRenderer
 from app.modules.keyword_marker import KeywordMarker
+from app.modules.subtitle_generator import SubtitleGenerator
 
 
 class GradioUI:
@@ -296,10 +297,29 @@ class GradioUI:
         try:
             client = Anthropic(api_key=config.ANTHROPIC_API_KEY)
 
-            prompt = f"""당신은 학생들을 가르치는 친절한 **강사**입니다.
+            # 슬라이드 위치에 따른 프롬프트 조정
+            if slide_num == 1:
+                intro_instruction = """당신은 학생들을 가르치는 친절한 **강사**입니다.
 다음 슬라이드를 보면서 학생들에게 내용을 **가르쳐주세요**.
 단순히 텍스트를 읽는 것이 아니라, 강의실에서 학생들 앞에 서서
 자연스럽게 설명하듯이 말해야 합니다.
+
+**이것은 프레젠테이션의 첫 번째 슬라이드입니다.**
+자연스럽게 인사말로 시작하고 주제를 소개해주세요."""
+            else:
+                intro_instruction = f"""당신은 학생들을 가르치는 친절한 **강사**입니다.
+다음 슬라이드를 보면서 학생들에게 내용을 **가르쳐주세요**.
+단순히 텍스트를 읽는 것이 아니라, 강의실에서 학생들 앞에 서서
+자연스럽게 설명하듯이 말해야 합니다.
+
+**이것은 프레젠테이션의 {slide_num}번째 슬라이드입니다 (총 {total_slides}개).**
+이전 슬라이드에서 이어지는 내용이므로:
+- ❌ "안녕하세요", "반갑습니다" 같은 인사말 사용 금지
+- ❌ 주제를 처음 소개하듯이 말하지 말 것
+- ✅ 이전 내용에서 자연스럽게 이어지도록 작성
+- ✅ "다음으로~", "이어서~", "그럼 이제~" 같은 연결 표현 사용"""
+
+            prompt = f"""{intro_instruction}
 
 【전체 프레젠테이션 맥락】
 {context}
@@ -502,6 +522,7 @@ class GradioUI:
         total_duration_minutes,
         enable_keyword_marking,
         keyword_mark_style,
+        enable_subtitles,
         transition_effect,
         transition_duration,
         video_quality,
@@ -722,6 +743,46 @@ class GradioUI:
             log_output = self.log("", log_output)
             yield log_output, None
 
+            # ===== STEP 4.5: 자막 생성 (선택적) =====
+            subtitle_file = None
+            if enable_subtitles:
+                log_output = self.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", log_output)
+                log_output = self.log("📝 자막 생성 중...", log_output)
+                log_output = self.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", log_output)
+                log_output = self.log("", log_output)
+                yield log_output, None
+
+                try:
+                    subtitle_generator = SubtitleGenerator()
+                    subtitle_file = config.META_DIR / f"{output_name}.srt"
+
+                    # audio_meta에서 스크립트와 타이밍 정보 추출
+                    subtitle_data = []
+                    for item in audio_meta:
+                        subtitle_data.append({
+                            "script": item.get("script", ""),
+                            "start_time": item.get("start_time", 0.0),
+                            "duration": item.get("duration", 0.0)
+                        })
+
+                    success = subtitle_generator.generate_srt(subtitle_data, subtitle_file)
+
+                    if success:
+                        log_output = self.log(f"✅ 자막 생성 완료: {subtitle_file.name}", log_output)
+                    else:
+                        log_output = self.log("⚠️  자막 생성 실패, 자막 없이 진행합니다", log_output)
+                        subtitle_file = None
+
+                    log_output = self.log("", log_output)
+                    yield log_output, None
+
+                except Exception as e:
+                    log_output = self.log(f"⚠️  자막 생성 중 오류: {str(e)}", log_output)
+                    log_output = self.log("→ 자막 없이 진행합니다", log_output)
+                    log_output = self.log("", log_output)
+                    subtitle_file = None
+                    yield log_output, None
+
             # ===== STEP 5: 영상 렌더링 =====
             progress(0.75, desc="영상 렌더링 중...")
             log_output = self.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", log_output)
@@ -760,7 +821,8 @@ class GradioUI:
                 scripts_json_path=scripts_json,
                 enable_keyword_marking=enable_keyword_marking,  # 키워드 마킹 활성화
                 transition_effect=transition_effect,
-                transition_duration=transition_duration
+                transition_duration=transition_duration,
+                subtitle_file=subtitle_file  # 자막 파일 (선택적)
             )
 
             if not success:
@@ -890,6 +952,14 @@ class GradioUI:
                         info="동그라미 또는 밑줄로 키워드 표시"
                     )
 
+                    gr.Markdown("### 📝 자막 옵션")
+
+                    enable_subtitles = gr.Checkbox(
+                        label="자막 활성화",
+                        value=True,
+                        info="영상에 한글 자막 표시"
+                    )
+
                     gr.Markdown("### 🎞️ 전환 효과 옵션")
 
                     transition_effect = gr.Dropdown(
@@ -967,6 +1037,7 @@ class GradioUI:
                     total_duration,
                     enable_keyword_marking,
                     keyword_mark_style,
+                    enable_subtitles,
                     transition_effect,
                     transition_duration,
                     video_quality,

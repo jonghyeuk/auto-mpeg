@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional
 import subprocess
 import os
+import shutil
 from .font_utils import get_font_path_with_fallback
 
 
@@ -352,6 +353,49 @@ class FFmpegRenderer:
             # 실패 시 전환 효과 없이 재시도
             return self.concatenate_clips(clip_paths, output_path)
 
+    def burn_subtitles(self, input_video: Path, subtitle_file: Path, output_video: Path) -> bool:
+        """
+        비디오에 SRT 자막을 번인(burn-in)
+
+        Args:
+            input_video: 입력 비디오 파일
+            subtitle_file: SRT 자막 파일
+            output_video: 출력 비디오 파일
+
+        Returns:
+            성공 여부
+        """
+        try:
+            # 한글 폰트 경로 가져오기
+            font_path = get_font_path_with_fallback()
+
+            # Windows 경로를 FFmpeg 형식으로 변환
+            subtitle_path_str = str(subtitle_file).replace('\\', '/').replace(':', '\\:')
+            font_path_str = str(font_path).replace('\\', '/').replace(':', '\\:')
+
+            # subtitles 필터를 사용하여 자막 번인
+            cmd = [
+                "ffmpeg",
+                "-i", str(input_video),
+                "-vf", f"subtitles={subtitle_path_str}:force_style='FontName={font_path_str},FontSize=24,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BorderStyle=3,Outline=2,Shadow=1,MarginV=30'",
+                "-c:a", "copy",  # 오디오는 그대로 복사
+                "-y",
+                str(output_video)
+            ]
+
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=True
+            )
+
+            return True
+
+        except subprocess.CalledProcessError as e:
+            print(f"✗ 자막 번인 에러: {e.stderr}")
+            return False
+
     def render_video(
         self,
         slides_json_path: Path,
@@ -363,7 +407,8 @@ class FFmpegRenderer:
         scripts_json_path: Optional[Path] = None,
         enable_keyword_marking: bool = False,
         transition_effect: str = "fade",
-        transition_duration: float = 0.5
+        transition_duration: float = 0.5,
+        subtitle_file: Optional[Path] = None
     ) -> bool:
         """
         전체 영상 렌더링
@@ -377,6 +422,7 @@ class FFmpegRenderer:
             output_video_path: 최종 출력 영상 경로
             scripts_json_path: 대본 정보 JSON (키워드 오버레이 포함)
             enable_keyword_marking: 키워드 마킹 사용 여부
+            subtitle_file: 자막 SRT 파일 경로 (선택적)
             transition_effect: 슬라이드 전환 효과 ("none", "fade", "dissolve", "slide", "wipe")
             transition_duration: 전환 효과 길이 (초)
 
@@ -465,6 +511,25 @@ class FFmpegRenderer:
             success = self.concatenate_clips(clip_paths, output_video_path)
 
         if success:
+            # 자막 추가 (선택적)
+            if subtitle_file and subtitle_file.exists():
+                print(f"\n자막 추가 중: {subtitle_file.name}")
+                temp_video = output_video_path.parent / f"{output_video_path.stem}_no_subs.mp4"
+
+                # 원본을 임시 파일로 이동
+                shutil.move(str(output_video_path), str(temp_video))
+
+                success = self.burn_subtitles(temp_video, subtitle_file, output_video_path)
+
+                if success:
+                    print(f"  ✓ 자막 추가 완료")
+                    # 임시 파일 삭제
+                    temp_video.unlink()
+                else:
+                    print(f"  ✗ 자막 추가 실패, 자막 없는 영상 사용")
+                    # 실패 시 원본 복구
+                    shutil.move(str(temp_video), str(output_video_path))
+
             print(f"✓ 영상 렌더링 완료: {output_video_path}")
 
             # 최종 영상 정보 출력
