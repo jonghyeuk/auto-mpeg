@@ -366,31 +366,49 @@ class FFmpegRenderer:
             성공 여부
         """
         try:
-            # 한글 폰트 경로 가져오기
-            font_path = get_font_path_with_fallback()
-
             # Windows 경로를 FFmpeg 형식으로 변환
+            # Windows: C:\path\file.srt -> C\:/path/file.srt
             subtitle_path_str = str(subtitle_file).replace('\\', '/').replace(':', '\\:')
-            font_path_str = str(font_path).replace('\\', '/').replace(':', '\\:')
 
-            # subtitles 필터를 사용하여 자막 번인
+            # 방법 1: force_style로 한글 폰트 지정
             cmd = [
                 "ffmpeg",
                 "-i", str(input_video),
-                "-vf", f"subtitles={subtitle_path_str}:force_style='FontName={font_path_str},FontSize=24,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BorderStyle=3,Outline=2,Shadow=1,MarginV=30'",
+                "-vf", f"subtitles={subtitle_path_str}:force_style='FontName=Malgun Gothic,FontSize=24,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BorderStyle=3,Outline=2,Shadow=1,MarginV=30'",
                 "-c:a", "copy",  # 오디오는 그대로 복사
                 "-y",
                 str(output_video)
             ]
 
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                check=True
-            )
+            try:
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    check=True
+                )
+                return True
 
-            return True
+            except subprocess.CalledProcessError as e:
+                print(f"  ⚠️  force_style 실패, 기본 스타일로 재시도...")
+
+                # 방법 2: force_style 없이 기본 설정 사용
+                cmd_simple = [
+                    "ffmpeg",
+                    "-i", str(input_video),
+                    "-vf", f"subtitles={subtitle_path_str}",
+                    "-c:a", "copy",
+                    "-y",
+                    str(output_video)
+                ]
+
+                result = subprocess.run(
+                    cmd_simple,
+                    capture_output=True,
+                    text=True,
+                    check=True
+                )
+                return True
 
         except subprocess.CalledProcessError as e:
             print(f"✗ 자막 번인 에러: {e.stderr}")
@@ -516,19 +534,28 @@ class FFmpegRenderer:
                 print(f"\n자막 추가 중: {subtitle_file.name}")
                 temp_video = output_video_path.parent / f"{output_video_path.stem}_no_subs.mp4"
 
-                # 원본을 임시 파일로 이동
-                shutil.move(str(output_video_path), str(temp_video))
+                try:
+                    # 원본을 임시 파일로 이동
+                    shutil.move(str(output_video_path), str(temp_video))
 
-                success = self.burn_subtitles(temp_video, subtitle_file, output_video_path)
+                    subtitle_success = self.burn_subtitles(temp_video, subtitle_file, output_video_path)
 
-                if success:
-                    print(f"  ✓ 자막 추가 완료")
-                    # 임시 파일 삭제
-                    temp_video.unlink()
-                else:
-                    print(f"  ✗ 자막 추가 실패, 자막 없는 영상 사용")
-                    # 실패 시 원본 복구
-                    shutil.move(str(temp_video), str(output_video_path))
+                    if subtitle_success:
+                        print(f"  ✓ 자막 추가 완료")
+                        # 임시 파일 삭제
+                        if temp_video.exists():
+                            temp_video.unlink()
+                    else:
+                        print(f"  ✗ 자막 추가 실패, 자막 없는 영상 사용")
+                        # 실패 시 원본 복구
+                        if temp_video.exists():
+                            shutil.move(str(temp_video), str(output_video_path))
+
+                except Exception as e:
+                    print(f"  ✗ 자막 처리 중 오류: {e}")
+                    # 오류 발생 시 원본 복구 시도
+                    if temp_video.exists() and not output_video_path.exists():
+                        shutil.move(str(temp_video), str(output_video_path))
 
             print(f"✓ 영상 렌더링 완료: {output_video_path}")
 
