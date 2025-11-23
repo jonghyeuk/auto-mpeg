@@ -8,6 +8,7 @@ from typing import List, Dict, Any, Optional
 import subprocess
 import os
 import shutil
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from .font_utils import get_font_path_with_fallback
 
 
@@ -433,6 +434,75 @@ class FFmpegRenderer:
                 temp_subtitle.unlink()
             return False
 
+    def _render_single_clip(
+        self,
+        slide: Dict,
+        audio_info: Dict,
+        slides_img_dir: Path,
+        audio_dir: Path,
+        clips_dir: Path,
+        scripts_data: Dict,
+        enable_keyword_marking: bool
+    ) -> Optional[Path]:
+        """
+        단일 슬라이드 클립 생성 (병렬 처리용 헬퍼 함수)
+
+        Args:
+            slide: 슬라이드 정보 딕셔너리
+            audio_info: 오디오 메타데이터
+            slides_img_dir: 슬라이드 이미지 디렉토리
+            audio_dir: 오디오 디렉토리
+            clips_dir: 클립 출력 디렉토리
+            scripts_data: 대본 데이터 딕셔너리
+            enable_keyword_marking: 키워드 마킹 사용 여부
+
+        Returns:
+            생성된 클립 경로 또는 None (실패 시)
+        """
+        index = slide["index"]
+
+        # 파일 경로
+        image_path = slides_img_dir / f"slide_{index:03d}.png"
+        audio_path = audio_dir / f"slide_{index:03d}.mp3"
+        clip_path = clips_dir / f"clip_{index:03d}.mp4"
+
+        # 이미지 파일이 없으면 스킵
+        if not image_path.exists():
+            print(f"  ⚠ 슬라이드 {index}: 이미지 파일 없음 ({image_path})")
+            return None
+
+        # 오디오 파일이 없으면 스킵
+        if not audio_path.exists():
+            print(f"  ⚠ 슬라이드 {index}: 오디오 파일 없음 ({audio_path})")
+            return None
+
+        print(f"  슬라이드 {index}: 클립 생성 중...")
+
+        # 키워드 오버레이 가져오기
+        keyword_overlays = []
+        if enable_keyword_marking and index in scripts_data:
+            keyword_overlays = scripts_data[index].get("keyword_overlays", [])
+            if keyword_overlays:
+                found_count = sum(1 for kw in keyword_overlays if kw.get("found"))
+                print(f"    → 키워드 마킹 {found_count}/{len(keyword_overlays)}개 추가")
+
+        # 클립 생성
+        success = self.create_slide_clip(
+            image_path,
+            audio_path,
+            audio_info["duration"],
+            clip_path,
+            keyword_overlays=keyword_overlays,
+            enable_keyword_marking=enable_keyword_marking
+        )
+
+        if success:
+            print(f"    ✓ 완료 ({audio_info['duration']}초)")
+            return clip_path
+        else:
+            print(f"    ✗ 실패")
+            return None
+
     def render_video(
         self,
         slides_json_path: Path,
@@ -446,10 +516,11 @@ class FFmpegRenderer:
         transition_effect: str = "fade",
         transition_duration: float = 0.5,
         subtitle_file: Optional[Path] = None,
-        subtitle_font_size: int = 18
+        subtitle_font_size: int = 18,
+        max_workers: int = 3
     ) -> bool:
         """
-        전체 영상 렌더링
+        전체 영상 렌더링 (병렬 처리)
 
         Args:
             slides_json_path: 슬라이드 정보 JSON
@@ -463,6 +534,7 @@ class FFmpegRenderer:
             subtitle_file: 자막 SRT 파일 경로 (선택적)
             transition_effect: 슬라이드 전환 효과 ("none", "fade", "dissolve", "slide", "wipe")
             transition_duration: 전환 효과 길이 (초)
+            max_workers: 최대 병렬 작업 수 (기본 3개, FFmpeg는 CPU 집약적이므로 낮게 설정)
 
         Returns:
             성공 여부
@@ -483,55 +555,40 @@ class FFmpegRenderer:
                 scripts_data = {s["index"]: s for s in scripts_list}
 
         clips_dir.mkdir(parents=True, exist_ok=True)
-        clip_paths = []
 
-        print(f"영상 렌더링 시작: {len(slides)}개 슬라이드")
+        print(f"영상 렌더링 시작: {len(slides)}개 슬라이드 (병렬 처리: {max_workers}개 동시)")
 
-        # 슬라이드별 클립 생성
-        for i, slide in enumerate(slides):
-            index = slide["index"]
-            audio_info = audio_meta[i]
+        # 병렬 처리로 슬라이드별 클립 생성
+        clip_results = []
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # 모든 작업 제출
+            future_to_slide = {}
+            for i, slide in enumerate(slides):
+                future = executor.submit(
+                    self._render_single_clip,
+                    slide,
+                    audio_meta[i],
+                    slides_img_dir,
+                    audio_dir,
+                    clips_dir,
+                    scripts_data,
+                    enable_keyword_marking
+                )
+                future_to_slide[future] = (i, slide)
 
-            # 파일 경로
-            image_path = slides_img_dir / f"slide_{index:03d}.png"
-            audio_path = audio_dir / f"slide_{index:03d}.mp3"
-            clip_path = clips_dir / f"clip_{index:03d}.mp4"
+            # 완료되는 순서대로 결과 수집
+            for future in as_completed(future_to_slide):
+                i, slide = future_to_slide[future]
+                try:
+                    clip_path = future.result()
+                    if clip_path:
+                        clip_results.append((i, clip_path))
+                except Exception as e:
+                    print(f"    ✗ 스레드 실행 오류 (슬라이드 {slide['index']}): {e}")
 
-            # 이미지 파일이 없으면 스킵
-            if not image_path.exists():
-                print(f"  ⚠ 슬라이드 {index}: 이미지 파일 없음 ({image_path})")
-                continue
-
-            # 오디오 파일이 없으면 스킵
-            if not audio_path.exists():
-                print(f"  ⚠ 슬라이드 {index}: 오디오 파일 없음 ({audio_path})")
-                continue
-
-            print(f"  슬라이드 {index}: 클립 생성 중...")
-
-            # 키워드 오버레이 가져오기
-            keyword_overlays = []
-            if enable_keyword_marking and index in scripts_data:
-                keyword_overlays = scripts_data[index].get("keyword_overlays", [])
-                if keyword_overlays:
-                    found_count = sum(1 for kw in keyword_overlays if kw.get("found"))
-                    print(f"    → 키워드 마킹 {found_count}/{len(keyword_overlays)}개 추가")
-
-            # 클립 생성
-            success = self.create_slide_clip(
-                image_path,
-                audio_path,
-                audio_info["duration"],
-                clip_path,
-                keyword_overlays=keyword_overlays,
-                enable_keyword_marking=enable_keyword_marking
-            )
-
-            if success:
-                clip_paths.append(clip_path)
-                print(f"    ✓ 완료 ({audio_info['duration']}초)")
-            else:
-                print(f"    ✗ 실패")
+        # index 순서대로 정렬
+        clip_results.sort(key=lambda x: x[0])
+        clip_paths = [clip_path for _, clip_path in clip_results]
 
         if not clip_paths:
             print("✗ 생성된 클립이 없습니다.")

@@ -1125,6 +1125,9 @@ def main():
     print()
 
     # Gradio 앱 실행
+    # Queue 활성화: 긴 작업(TTS, 렌더링) 처리 시 웹소켓 연결 유지
+    demo.queue(max_size=20)
+
     demo.launch(
         server_name="0.0.0.0",
         server_port=7860,
