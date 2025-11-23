@@ -353,7 +353,7 @@ class FFmpegRenderer:
             # 실패 시 전환 효과 없이 재시도
             return self.concatenate_clips(clip_paths, output_path)
 
-    def burn_subtitles(self, input_video: Path, subtitle_file: Path, output_video: Path) -> bool:
+    def burn_subtitles(self, input_video: Path, subtitle_file: Path, output_video: Path, font_size: int = 18) -> bool:
         """
         비디오에 SRT 자막을 번인(burn-in)
 
@@ -361,6 +361,7 @@ class FFmpegRenderer:
             input_video: 입력 비디오 파일
             subtitle_file: SRT 자막 파일
             output_video: 출력 비디오 파일
+            font_size: 자막 폰트 크기 (기본값: 18)
 
         Returns:
             성공 여부
@@ -374,7 +375,7 @@ class FFmpegRenderer:
             cmd = [
                 "ffmpeg",
                 "-i", str(input_video),
-                "-vf", f"subtitles={temp_subtitle.name}:force_style='FontName=Malgun Gothic,FontSize=18,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BorderStyle=3,Outline=2,Shadow=1,MarginV=30'",
+                "-vf", f"subtitles={temp_subtitle.name}:force_style='FontName=Malgun Gothic,FontSize={font_size},PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BorderStyle=3,Outline=2,Shadow=1,MarginV=30'",
                 "-c:a", "copy",  # 오디오는 그대로 복사
                 "-y",
                 str(output_video)
@@ -444,7 +445,8 @@ class FFmpegRenderer:
         enable_keyword_marking: bool = False,
         transition_effect: str = "fade",
         transition_duration: float = 0.5,
-        subtitle_file: Optional[Path] = None
+        subtitle_file: Optional[Path] = None,
+        subtitle_font_size: int = 18
     ) -> bool:
         """
         전체 영상 렌더링
@@ -556,7 +558,7 @@ class FFmpegRenderer:
                     # 원본을 임시 파일로 이동
                     shutil.move(str(output_video_path), str(temp_video))
 
-                    subtitle_success = self.burn_subtitles(temp_video, subtitle_file, output_video_path)
+                    subtitle_success = self.burn_subtitles(temp_video, subtitle_file, output_video_path, subtitle_font_size)
 
                     if subtitle_success:
                         print(f"  ✓ 자막 추가 완료")

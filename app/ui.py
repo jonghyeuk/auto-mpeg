@@ -528,6 +528,7 @@ class GradioUI:
         enable_keyword_marking,
         keyword_mark_style,
         enable_subtitles,
+        subtitle_font_size,
         transition_effect,
         transition_duration,
         video_quality,
@@ -834,7 +835,8 @@ class GradioUI:
                 enable_keyword_marking=enable_keyword_marking,  # 키워드 마킹 활성화
                 transition_effect=transition_effect,
                 transition_duration=transition_duration,
-                subtitle_file=subtitle_file  # 자막 파일 (선택적)
+                subtitle_file=subtitle_file,  # 자막 파일 (선택적)
+                subtitle_font_size=int(subtitle_font_size)  # 자막 크기
             )
 
             if not success:
@@ -973,6 +975,15 @@ class GradioUI:
                         info="영상에 한글 자막 표시"
                     )
 
+                    subtitle_font_size = gr.Slider(
+                        minimum=12,
+                        maximum=32,
+                        value=18,
+                        step=2,
+                        label="자막 크기",
+                        info="폰트 크기 (12=작게, 18=보통, 24=크게)"
+                    )
+
                     gr.Markdown("### 🎞️ 전환 효과 옵션")
 
                     transition_effect = gr.Dropdown(
@@ -1051,6 +1062,7 @@ class GradioUI:
                     enable_keyword_marking,
                     keyword_mark_style,
                     enable_subtitles,
+                    subtitle_font_size,
                     transition_effect,
                     transition_duration,
                     video_quality,

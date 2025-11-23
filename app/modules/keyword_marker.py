@@ -109,54 +109,66 @@ class KeywordMarker:
         try:
             # OCR 수행
             results = self.ocr_reader.readtext(image_path)
-
-            # 키워드 정규화 (띄어쓰기 제거, 소문자 변환)
-            keyword_normalized = keyword.lower().strip().replace(" ", "")
-
-            # 단일 텍스트 매칭
-            for (bbox, text, confidence) in results:
-                if confidence < 0.3:  # 신뢰도가 너무 낮으면 스킵
-                    continue
-
-                text_normalized = text.lower().strip().replace(" ", "")
-
-                # 정규화된 버전으로 비교 (띄어쓰기 무시)
-                if keyword_normalized == text_normalized or keyword_normalized in text_normalized or text_normalized in keyword_normalized:
-                    # bbox는 [[x0, y0], [x1, y0], [x1, y1], [x0, y1]] 형식
-                    x0 = int(min(point[0] for point in bbox))
-                    y0 = int(min(point[1] for point in bbox))
-                    x1 = int(max(point[0] for point in bbox))
-                    y1 = int(max(point[1] for point in bbox))
-                    return (x0, y0, x1, y1)
-
-            # 여러 텍스트 연속 매칭 (인접한 텍스트 블록 결합)
-            max_window = 10
-            for window_size in range(1, min(max_window + 1, len(results) + 1)):
-                for i in range(len(results) - window_size + 1):
-                    # 윈도우 내 모든 텍스트 합치기
-                    window_texts = [results[i + j][1] for j in range(window_size)]
-                    combined_text = "".join(window_texts).lower().replace(" ", "")
-
-                    # 정규화된 키워드가 포함되어 있는지 확인
-                    if keyword_normalized in combined_text or combined_text in keyword_normalized:
-                        # 유사도 확인 (너무 긴 텍스트는 제외)
-                        if len(combined_text) < len(keyword_normalized) * 3:
-                            # 여러 bbox를 하나로 합치기
-                            all_points = []
-                            for j in range(window_size):
-                                all_points.extend(results[i + j][0])
-
-                            x0 = int(min(point[0] for point in all_points))
-                            y0 = int(min(point[1] for point in all_points))
-                            x1 = int(max(point[0] for point in all_points))
-                            y1 = int(max(point[1] for point in all_points))
-                            return (x0, y0, x1, y1)
-
-            return None
+            return self._find_keyword_in_ocr_results(keyword, results)
 
         except Exception as e:
             print(f"⚠️  이미지에서 키워드 찾기 실패: {e}")
             return None
+
+    def _find_keyword_in_ocr_results(self, keyword: str, ocr_results: List) -> Optional[Tuple[int, int, int, int]]:
+        """
+        OCR 결과에서 키워드 검색 (내부 헬퍼 함수)
+
+        Args:
+            keyword: 찾을 키워드
+            ocr_results: OCR 결과 리스트
+
+        Returns:
+            (x0, y0, x1, y1) bbox 또는 None
+        """
+        # 키워드 정규화 (띄어쓰기 제거, 소문자 변환)
+        keyword_normalized = keyword.lower().strip().replace(" ", "")
+
+        # 단일 텍스트 매칭
+        for (bbox, text, confidence) in ocr_results:
+            if confidence < 0.3:  # 신뢰도가 너무 낮으면 스킵
+                continue
+
+            text_normalized = text.lower().strip().replace(" ", "")
+
+            # 정규화된 버전으로 비교 (띄어쓰기 무시)
+            if keyword_normalized == text_normalized or keyword_normalized in text_normalized or text_normalized in keyword_normalized:
+                # bbox는 [[x0, y0], [x1, y0], [x1, y1], [x0, y1]] 형식
+                x0 = int(min(point[0] for point in bbox))
+                y0 = int(min(point[1] for point in bbox))
+                x1 = int(max(point[0] for point in bbox))
+                y1 = int(max(point[1] for point in bbox))
+                return (x0, y0, x1, y1)
+
+        # 여러 텍스트 연속 매칭 (인접한 텍스트 블록 결합)
+        max_window = 10
+        for window_size in range(1, min(max_window + 1, len(ocr_results) + 1)):
+            for i in range(len(ocr_results) - window_size + 1):
+                # 윈도우 내 모든 텍스트 합치기
+                window_texts = [ocr_results[i + j][1] for j in range(window_size)]
+                combined_text = "".join(window_texts).lower().replace(" ", "")
+
+                # 정규화된 키워드가 포함되어 있는지 확인
+                if keyword_normalized in combined_text or combined_text in keyword_normalized:
+                    # 유사도 확인 (너무 긴 텍스트는 제외)
+                    if len(combined_text) < len(keyword_normalized) * 3:
+                        # 여러 bbox를 하나로 합치기
+                        all_points = []
+                        for j in range(window_size):
+                            all_points.extend(ocr_results[i + j][0])
+
+                        x0 = int(min(point[0] for point in all_points))
+                        y0 = int(min(point[1] for point in all_points))
+                        x1 = int(max(point[0] for point in all_points))
+                        y1 = int(max(point[1] for point in all_points))
+                        return (x0, y0, x1, y1)
+
+        return None
 
     def draw_circle_on_image(self, image_path: str, bbox: Tuple[float, float, float, float],
                             output_path: str, color: Tuple[int, int, int] = (255, 0, 0),
@@ -262,6 +274,13 @@ class KeywordMarker:
 
             x0, y0, x1, y1 = bbox
 
+            # bbox를 이미지 해상도 내로 클리핑 (경계를 벗어나지 않도록)
+            margin = 20  # 동그라미/밑줄의 여유 공간
+            x0 = max(margin, min(x0, image_width - margin))
+            y0 = max(margin, min(y0, image_height - margin))
+            x1 = max(margin, min(x1, image_width - margin))
+            y1 = max(margin, min(y1, image_height - margin))
+
             if mark_style == "circle":
                 # 타원 그리기
                 center_x = int((x0 + x1) / 2)
@@ -269,11 +288,17 @@ class KeywordMarker:
                 width = int((x1 - x0) / 2) + 15
                 height = int((y1 - y0) / 2) + 15
 
-                cv2.ellipse(overlay, (center_x, center_y), (width, height), 0, 0, 360, color, thickness)
+                # 타원이 이미지를 벗어나지 않도록 크기 제한
+                max_width = min(width, center_x - margin, image_width - center_x - margin)
+                max_height = min(height, center_y - margin, image_height - center_y - margin)
+
+                cv2.ellipse(overlay, (center_x, center_y), (max_width, max_height), 0, 0, 360, color, thickness)
 
             else:  # underline
                 # 밑줄 그리기
                 y_line = int(y1) + 5
+                # y 좌표도 클리핑
+                y_line = max(0, min(y_line, image_height - 1))
                 cv2.line(overlay, (int(x0), y_line), (int(x1), y_line), color, thickness)
 
             # PNG로 저장 (투명도 유지)
@@ -315,6 +340,16 @@ class KeywordMarker:
 
         img_height, img_width = img.shape[:2]
 
+        # OCR 결과 캐싱: PPT인 경우(PDF 아닌 경우) 한 번만 OCR 실행
+        ocr_cache = None
+        if self.use_ocr and (pdf_path is None):
+            try:
+                print(f"🔍 OCR 실행 중 (1회만)...")
+                ocr_cache = self.ocr_reader.readtext(slide_image_path)
+                print(f"  ✓ OCR 완료: {len(ocr_cache)}개 텍스트 블록 발견")
+            except Exception as e:
+                print(f"  ⚠️  OCR 실패: {e}")
+
         for i, kw in enumerate(keywords):
             keyword_text = kw.get("text", "")
             timing = kw.get("timing", 0)
@@ -350,8 +385,9 @@ class KeywordMarker:
                     )
 
             # OCR로 찾기 (PDF에서 못 찾았거나 PPT인 경우)
-            if bbox is None and self.use_ocr:
-                bbox = self.find_keyword_in_image(slide_image_path, keyword_text)
+            # 캐시된 OCR 결과 사용 (1회만 실행)
+            if bbox is None and ocr_cache is not None:
+                bbox = self._find_keyword_in_ocr_results(keyword_text, ocr_cache)
 
             # 마킹하기
             if bbox:
