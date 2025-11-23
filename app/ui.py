@@ -777,6 +777,57 @@ class GradioUI:
             total_duration = sum(item['duration'] for item in audio_meta)
             log_output = self.log(f"✅ TTS 생성 완료: {len(audio_meta)}개 오디오 ({total_duration:.1f}초)", log_output)
             log_output = self.log("", log_output)
+
+            # TTS 생성 후 키워드 타이밍을 실제 TTS 길이로 재조정
+            log_output = self.log("⏱️  키워드 타이밍 재조정 (실제 TTS 길이 기준):", log_output)
+            timing_adjusted = False
+            for i, script_item in enumerate(scripts_data):
+                if i >= len(audio_meta):
+                    continue
+
+                actual_duration = audio_meta[i]['duration']
+                script_text = script_item['script']
+                keyword_overlays = script_item.get('keyword_overlays', [])
+
+                if not keyword_overlays:
+                    continue
+
+                # 예상 길이 (글자 수 기반)
+                estimated_duration = len(script_text) / 3.5
+
+                # 실제 길이와 예상 길이 비교
+                if abs(actual_duration - estimated_duration) > 2.0:  # 2초 이상 차이
+                    timing_adjusted = True
+                    log_output = self.log(f"  슬라이드 {i+1}: 예상 {estimated_duration:.1f}초 → 실제 {actual_duration:.1f}초", log_output)
+
+                    # 키워드 타이밍 재계산
+                    for kw_overlay in keyword_overlays:
+                        if not kw_overlay.get('found'):
+                            continue
+
+                        keyword_text = kw_overlay['keyword']
+                        old_timing = kw_overlay['timing']
+
+                        # 대본에서 키워드 위치 찾기
+                        keyword_pos = script_text.find(keyword_text)
+                        if keyword_pos >= 0:
+                            # 실제 TTS 길이 기준으로 타이밍 재계산
+                            char_ratio = keyword_pos / max(len(script_text), 1)
+                            new_timing = char_ratio * actual_duration
+
+                            # 타이밍 업데이트
+                            kw_overlay['timing'] = new_timing
+                            log_output = self.log(f"    - '{keyword_text}': {old_timing:.1f}초 → {new_timing:.1f}초", log_output)
+
+            if timing_adjusted:
+                # 재조정된 타이밍으로 scripts.json 업데이트
+                with open(scripts_json, 'w', encoding='utf-8') as f:
+                    json.dump(scripts_data, f, ensure_ascii=False, indent=2)
+                log_output = self.log(f"  ✓ 타이밍 재조정 완료 및 저장", log_output)
+            else:
+                log_output = self.log(f"  ✓ 타이밍 조정 불필요 (예상과 실제 길이 유사)", log_output)
+
+            log_output = self.log("", log_output)
             yield log_output, None
 
             # ===== STEP 4.5: 자막 생성 (선택적) =====

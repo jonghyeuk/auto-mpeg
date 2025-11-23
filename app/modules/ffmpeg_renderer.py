@@ -112,12 +112,15 @@ class FFmpegRenderer:
                 prev_label = "base"
                 for i, overlay_info in enumerate(overlay_inputs):
                     timing = overlay_info.get("timing", 0)
+                    keyword = overlay_info.get("keyword", "Unknown")
 
                     # 애니메이션 타이밍
                     fade_in_start = max(0, timing - 0.5)
                     fade_in_end = timing
                     fade_out_start = timing + 2.0
                     fade_out_end = timing + 2.5
+
+                    print(f"    🎬 '{keyword}': {fade_in_start:.1f}초 페이드인 → {timing:.1f}초 완전표시 → {fade_out_start:.1f}초 유지 → {fade_out_end:.1f}초 페이드아웃")
 
                     # 알파 블렌딩 표현식 (fade in/out)
                     alpha_expr = f"if(lt(t,{fade_in_end}),(t-{fade_in_start})/0.5,if(lt(t,{fade_out_start}),1,({fade_out_end}-t)/0.5))"
