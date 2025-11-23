@@ -323,7 +323,8 @@ class KeywordMarker:
             if bbox:
                 if create_overlay:
                     # 투명 오버레이 생성 (FFmpeg용)
-                    output_path = output_dir / f"overlay_{i}_{keyword_text.replace(' ', '_')}.png"
+                    # 한글 파일명 문제 방지를 위해 인덱스 기반 파일명 사용
+                    output_path = output_dir / f"overlay_{i}.png"
                     success = self.create_transparent_overlay(
                         img_width, img_height, bbox, str(output_path),
                         mark_style=mark_style,
@@ -332,7 +333,7 @@ class KeywordMarker:
                     )
                 else:
                     # 직접 그리기
-                    output_path = output_dir / f"marked_{i}_{keyword_text.replace(' ', '_')}.png"
+                    output_path = output_dir / f"marked_{i}.png"
                     if mark_style == "circle":
                         success = self.draw_circle_on_image(slide_image_path, bbox, str(output_path))
                     else:  # underline
