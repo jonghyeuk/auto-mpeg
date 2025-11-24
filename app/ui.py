@@ -267,7 +267,7 @@ class GradioUI:
             return "", log_output
 
     def generate_script_with_thinking(self, slide, context, slide_num, total_slides, target_duration, progress, log_output,
-                                     slide_image_path=None, pdf_path=None, page_num=None, enable_keyword_marking=True, keyword_mark_style="circle"):
+                                     custom_request="", slide_image_path=None, pdf_path=None, page_num=None, enable_keyword_marking=True, keyword_mark_style="circle"):
         """
         개별 슬라이드 대본 생성 (사고 과정 포함)
 
@@ -335,6 +335,9 @@ class GradioUI:
 {slide.get('body', '')}
 {f"발표자 노트: {slide.get('notes', '')}" if slide.get('notes') else ''}
 
+{f'''【사용자 요청사항】
+{custom_request}
+''' if custom_request and custom_request.strip() else ''}
 【강사로서 반드시 지켜야 할 사항】
 1. ✅ **슬라이드의 모든 내용을 빠짐없이 설명**하세요
    - 제목, 본문, 그림, 도표, 차트 등 모든 시각적 요소 포함
@@ -552,6 +555,7 @@ class GradioUI:
         self,
         pptx_file,
         output_name,
+        custom_request,
         voice_choice,
         resolution_choice,
         total_duration_minutes,
@@ -721,6 +725,7 @@ class GradioUI:
                     slides_per_duration,  # 각 슬라이드 목표 시간
                     progress,
                     log_output,
+                    custom_request=custom_request,
                     slide_image_path=slide_image_path if slide_image_path.exists() else None,
                     pdf_path=pdf_file_path,
                     page_num=i,  # 0부터 시작
@@ -1007,6 +1012,14 @@ class GradioUI:
                         value="output_video"
                     )
 
+                    custom_request = gr.Textbox(
+                        label="요청사항 (선택)",
+                        placeholder="예: 초등학생도 이해할 수 있게 쉽게 설명해주세요",
+                        lines=2,
+                        value="",
+                        info="대본 생성 시 반영할 요청사항 (비워두면 기본 스타일로 생성)"
+                    )
+
                     # 슬라이드 개수 표시 (숨김)
                     slide_count_state = gr.State(value=0)
 
@@ -1137,6 +1150,7 @@ class GradioUI:
                 inputs=[
                     pptx_input,
                     output_name,
+                    custom_request,
                     voice_choice,
                     resolution_choice,
                     total_duration,
