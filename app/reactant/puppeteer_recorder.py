@@ -24,20 +24,19 @@ def record_html_to_video(html_path: Path, output_video: Path, duration: float = 
     # Puppeteer 녹화 스크립트 생성
     recorder_script = create_puppeteer_script(html_path, output_video, duration)
 
-    # 임시 JS 파일로 저장
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.js', delete=False, encoding='utf-8') as f:
-        f.write(recorder_script)
-        temp_script_path = f.name
+    # 프로젝트 루트 디렉토리 (node_modules가 있는 곳)
+    project_root = Path(__file__).parent.parent.parent
+
+    # 임시 JS 파일을 프로젝트 루트에 저장 (node_modules 찾기 위해)
+    temp_script_path = project_root / f"temp_puppeteer_{hash(str(html_path))}.js"
+    temp_script_path.write_text(recorder_script, encoding='utf-8')
 
     try:
         # Node.js로 Puppeteer 스크립트 실행
         print("  🌐 브라우저 시작 중...")
 
-        # 프로젝트 루트 디렉토리에서 실행 (node_modules 찾기 위해)
-        project_root = Path(__file__).parent.parent.parent
-
         result = subprocess.run(
-            ['node', temp_script_path],
+            ['node', str(temp_script_path)],
             capture_output=True,
             text=True,
             timeout=duration + 60,  # 녹화 시간 + 여유 시간
@@ -55,7 +54,7 @@ def record_html_to_video(html_path: Path, output_video: Path, duration: float = 
 
     finally:
         # 임시 스크립트 삭제
-        Path(temp_script_path).unlink(missing_ok=True)
+        temp_script_path.unlink(missing_ok=True)
 
 
 def create_puppeteer_script(html_path: Path, output_video: Path, duration: float) -> str:
