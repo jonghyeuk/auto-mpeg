@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional
 import subprocess
 import os
+import shutil
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from .font_utils import get_font_path_with_fallback
 
 
@@ -41,36 +43,76 @@ class FFmpegRenderer:
         audio_path: Path,
         duration: float,
         output_path: Path,
-        keywords: Optional[List[Dict[str, Any]]] = None,
-        enable_text_animation: bool = False
+        keyword_overlays: Optional[List[Dict[str, Any]]] = None,
+        enable_keyword_marking: bool = False
     ) -> bool:
         """
-        단일 슬라이드 클립 생성 (이미지 + 오디오 + 텍스트 애니메이션)
+        단일 슬라이드 클립 생성 (이미지 + 오디오 + 키워드 마킹 오버레이)
 
         Args:
             image_path: 슬라이드 이미지 경로
             audio_path: 오디오 파일 경로
             duration: 영상 길이 (초)
             output_path: 출력 영상 경로
-            keywords: 텍스트 애니메이션용 키워드 리스트 [{"text": "...", "timing": 2.5}, ...]
-            enable_text_animation: 텍스트 애니메이션 사용 여부
+            keyword_overlays: 키워드 오버레이 리스트 [{"overlay_image": "path", "timing": 2.5, "found": True}, ...]
+            enable_keyword_marking: 키워드 마킹 사용 여부
 
         Returns:
             성공 여부
         """
         try:
-            # 기본 비디오 필터 (스케일 및 패딩)
-            vf_filters = [f"scale={self.width}:{self.height}:force_original_aspect_ratio=decrease,pad={self.width}:{self.height}:(ow-iw)/2:(oh-ih)/2"]
+            # 기본 FFmpeg 명령 시작
+            cmd = [
+                "ffmpeg",
+                "-y",  # 덮어쓰기
+                "-loop", "1",  # 이미지 루프
+                "-i", str(image_path),  # 입력 이미지 (input 0)
+            ]
 
-            # 텍스트 애니메이션 추가
-            if enable_text_animation and keywords:
-                font_path = get_font_path_with_fallback()
-                # Windows 경로를 FFmpeg 형식으로 변환 (역슬래시 → 슬래시, 콜론 이스케이프)
-                font_path_escaped = font_path.replace('\\', '/').replace(':', '\\:')
+            # 오버레이 이미지 입력 추가
+            overlay_inputs = []
+            if enable_keyword_marking and keyword_overlays:
+                print(f"🔍 키워드 오버레이 처리 시작 ({len(keyword_overlays)}개)")
+                for idx, overlay_info in enumerate(keyword_overlays):
+                    print(f"  [{idx}] 검사: {overlay_info.get('keyword', 'Unknown')}")
+                    print(f"      - found: {overlay_info.get('found')}")
+                    print(f"      - overlay_image: {overlay_info.get('overlay_image')}")
 
-                for kw in keywords:
-                    text = kw.get("text", "")
-                    timing = kw.get("timing", 0)
+                    if overlay_info.get("found") and overlay_info.get("overlay_image"):
+                        overlay_path = overlay_info["overlay_image"]
+                        path_exists = Path(overlay_path).exists()
+                        print(f"      - 파일 존재: {path_exists}")
+
+                        if path_exists:
+                            cmd.extend(["-loop", "1", "-i", str(overlay_path)])
+                            overlay_inputs.append(overlay_info)
+                            print(f"      ✓ 오버레이 추가됨")
+                        else:
+                            print(f"      ✗ 파일이 존재하지 않음: {overlay_path}")
+                    else:
+                        print(f"      ✗ 스킵 (found={overlay_info.get('found')}, has_image={bool(overlay_info.get('overlay_image'))})")
+
+                print(f"🔍 최종 오버레이 개수: {len(overlay_inputs)}개")
+            else:
+                if not enable_keyword_marking:
+                    print("🔍 키워드 마킹 비활성화됨")
+                elif not keyword_overlays:
+                    print("🔍 키워드 오버레이 데이터 없음")
+
+            # 오디오 입력
+            cmd.extend(["-i", str(audio_path)])  # 마지막 입력은 오디오
+
+            # 필터 복잡성 구성
+            if overlay_inputs:
+                # 이미지가 이미 목표 해상도(1920x1080)로 스케일+패딩되어 있음
+                # 추가 스케일링 없이 그대로 사용
+                filter_complex = f"[0:v]format=yuv420p[base]"
+
+                # 각 오버레이에 대해 overlay 필터 추가
+                prev_label = "base"
+                for i, overlay_info in enumerate(overlay_inputs):
+                    timing = overlay_info.get("timing", 0)
+                    keyword = overlay_info.get("keyword", "Unknown")
 
                     # 애니메이션 타이밍
                     fade_in_start = max(0, timing - 0.5)
@@ -78,35 +120,37 @@ class FFmpegRenderer:
                     fade_out_start = timing + 2.0
                     fade_out_end = timing + 2.5
 
-                    # 텍스트 이스케이프 (FFmpeg drawtext용)
-                    text_escaped = text.replace("'", "'\\\\\\''").replace(":", "\\:")
+                    print(f"    🎬 '{keyword}': {fade_in_start:.1f}초 페이드인 → {timing:.1f}초 완전표시 → {fade_out_start:.1f}초 유지 → {fade_out_end:.1f}초 페이드아웃")
 
-                    # drawtext 필터
-                    drawtext_filter = (
-                        f"drawtext="
-                        f"text='{text_escaped}':"
-                        f"fontfile='{font_path_escaped}':"
-                        f"fontsize=80:"
-                        f"fontcolor=white:"
-                        f"borderw=3:"
-                        f"bordercolor=black:"
-                        f"x=(w-text_w)/2:"
-                        f"y=h-150:"  # 화면 하단에서 150px 위
-                        f"enable='between(t,{fade_in_start},{fade_out_end})':"
-                        f"alpha='if(lt(t,{fade_in_end}),(t-{fade_in_start})/0.5,if(lt(t,{fade_out_start}),1,({fade_out_end}-t)/0.5))'"
-                    )
+                    # 알파 블렌딩 표현식 (fade in/out)
+                    alpha_expr = f"if(lt(t,{fade_in_end}),(t-{fade_in_start})/0.5,if(lt(t,{fade_out_start}),1,({fade_out_end}-t)/0.5))"
 
-                    vf_filters.append(drawtext_filter)
+                    # 오버레이 입력 인덱스 (input 0은 base 이미지, input 1부터 오버레이)
+                    overlay_idx = i + 1
 
-            # 모든 필터를 ","로 연결
-            vf_string = ",".join(vf_filters)
+                    # 출력 레이블
+                    if i == len(overlay_inputs) - 1:
+                        # 마지막 오버레이
+                        out_label = "out"
+                    else:
+                        out_label = f"tmp{i}"
 
-            cmd = [
-                "ffmpeg",
-                "-y",  # 덮어쓰기
-                "-loop", "1",  # 이미지 루프
-                "-i", str(image_path),  # 입력 이미지
-                "-i", str(audio_path),  # 입력 오디오
+                    # overlay 필터 추가
+                    filter_complex += f";[{prev_label}][{overlay_idx}:v]overlay=enable='between(t,{fade_in_start},{fade_out_end})':format=auto:eval=frame,format=yuv420p[{out_label}]"
+
+                    prev_label = out_label
+
+                # filter_complex 추가
+                cmd.extend(["-filter_complex", filter_complex])
+                cmd.extend(["-map", "[out]"])  # 비디오 출력 매핑
+                cmd.extend(["-map", f"{len(overlay_inputs) + 1}:a"])  # 오디오 출력 매핑 (마지막 입력)
+            else:
+                # 오버레이 없음: 이미지가 이미 목표 해상도로 스케일+패딩되어 있음
+                # 포맷 변환만 수행
+                cmd.extend(["-vf", "format=yuv420p"])
+
+            # 공통 인코딩 옵션
+            cmd.extend([
                 "-c:v", "libx264",  # 비디오 코덱
                 "-preset", self.preset,  # 인코딩 속도
                 "-crf", str(self.crf),  # 품질
@@ -114,11 +158,18 @@ class FFmpegRenderer:
                 "-b:a", "192k",  # 오디오 비트레이트
                 "-ar", "44100",  # 샘플레이트
                 "-pix_fmt", "yuv420p",  # 픽셀 포맷
-                "-vf", vf_string,  # 비디오 필터
                 "-t", str(duration),  # 영상 길이
                 "-shortest",  # 짧은 입력에 맞춤
                 str(output_path)
-            ]
+            ])
+
+            # 디버그: FFmpeg 명령어 출력
+            if overlay_inputs:
+                print(f"\n🔍 FFmpeg 디버그 (키워드 마킹 {len(overlay_inputs)}개):")
+                overlay_files = [Path(oi['overlay_image']).name for oi in overlay_inputs]
+                timings = [f"{oi['timing']:.1f}초" for oi in overlay_inputs]
+                print(f"  - 오버레이 파일: {overlay_files}")
+                print(f"  - 타이밍: {timings}")
 
             result = subprocess.run(
                 cmd,
@@ -126,6 +177,9 @@ class FFmpegRenderer:
                 text=True,
                 check=True
             )
+
+            if result.stderr and "error" in result.stderr.lower():
+                print(f"⚠️  FFmpeg 경고: {result.stderr[:500]}")
 
             return True
 
@@ -139,7 +193,7 @@ class FFmpegRenderer:
         output_path: Path
     ) -> bool:
         """
-        여러 클립을 하나의 영상으로 연결
+        여러 클립을 하나의 영상으로 연결 (전환 효과 없음)
 
         Args:
             clip_paths: 클립 파일 경로 리스트
@@ -182,6 +236,277 @@ class FFmpegRenderer:
             print(f"✗ FFmpeg concat 에러: {e.stderr}")
             return False
 
+    def get_video_duration(self, video_path: Path) -> float:
+        """영상 길이 가져오기 (초)"""
+        try:
+            cmd = [
+                "ffprobe",
+                "-v", "error",
+                "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+                str(video_path)
+            ]
+
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=True
+            )
+
+            return float(result.stdout.strip())
+
+        except Exception:
+            return 0.0
+
+    def concatenate_clips_with_transition(
+        self,
+        clip_paths: List[Path],
+        output_path: Path,
+        transition: str = "fade",
+        duration: float = 0.5
+    ) -> bool:
+        """
+        여러 클립을 전환 효과와 함께 하나의 영상으로 연결
+
+        Args:
+            clip_paths: 클립 파일 경로 리스트
+            output_path: 출력 영상 경로
+            transition: 전환 효과 ("fade", "dissolve", "slide", "wipe")
+            duration: 전환 효과 길이 (초)
+
+        Returns:
+            성공 여부
+        """
+        if len(clip_paths) < 2:
+            # 클립이 1개면 전환 효과 없이 복사
+            return self.concatenate_clips(clip_paths, output_path)
+
+        try:
+            # xfade 효과 매핑
+            xfade_map = {
+                "fade": "fade",
+                "dissolve": "dissolve",
+                "slide": "slideleft",
+                "wipe": "wipeleft"
+            }
+            xfade_effect = xfade_map.get(transition, "fade")
+
+            # 각 클립의 길이 가져오기
+            clip_durations = []
+            for clip_path in clip_paths:
+                clip_duration = self.get_video_duration(clip_path)
+                clip_durations.append(clip_duration)
+
+            # FFmpeg 명령 구성
+            cmd = ["ffmpeg", "-y"]
+
+            # 모든 클립 입력
+            for clip_path in clip_paths:
+                cmd.extend(["-i", str(clip_path)])
+
+            # filter_complex 구성
+            filter_parts = []
+            prev_label = "[0:v]"
+            offset = 0.0
+
+            for i in range(len(clip_paths) - 1):
+                curr_label = f"[v{i}]" if i < len(clip_paths) - 2 else "[outv]"
+                next_input = f"[{i+1}:v]"
+
+                # offset 계산: 이전 클립들의 길이 합 - 전환 효과 길이 * 인덱스
+                if i == 0:
+                    offset = clip_durations[0] - duration
+                else:
+                    offset += clip_durations[i] - duration
+
+                # xfade 필터 추가
+                filter_parts.append(
+                    f"{prev_label}{next_input}xfade=transition={xfade_effect}:duration={duration}:offset={offset:.2f}{curr_label}"
+                )
+                prev_label = curr_label
+
+            # 오디오 연결
+            audio_inputs = "".join(f"[{i}:a]" for i in range(len(clip_paths)))
+            filter_parts.append(f"{audio_inputs}concat=n={len(clip_paths)}:v=0:a=1[outa]")
+
+            filter_complex = ";".join(filter_parts)
+
+            cmd.extend([
+                "-filter_complex", filter_complex,
+                "-map", "[outv]",
+                "-map", "[outa]",
+                "-c:v", "libx264",
+                "-preset", self.preset,
+                "-crf", str(self.crf),
+                "-c:a", "aac",
+                str(output_path)
+            ])
+
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=True
+            )
+
+            return True
+
+        except subprocess.CalledProcessError as e:
+            print(f"✗ FFmpeg xfade 에러: {e.stderr}")
+            print(f"  → 전환 효과 없이 재시도...")
+            # 실패 시 전환 효과 없이 재시도
+            return self.concatenate_clips(clip_paths, output_path)
+
+    def burn_subtitles(self, input_video: Path, subtitle_file: Path, output_video: Path, font_size: int = 18) -> bool:
+        """
+        비디오에 SRT 자막을 번인(burn-in)
+
+        Args:
+            input_video: 입력 비디오 파일
+            subtitle_file: SRT 자막 파일
+            output_video: 출력 비디오 파일
+            font_size: 자막 폰트 크기 (기본값: 18)
+
+        Returns:
+            성공 여부
+        """
+        try:
+            # Windows 경로 이스케이핑 문제 해결: 자막 파일을 비디오와 같은 디렉토리로 복사
+            temp_subtitle = input_video.parent / "temp_subtitle.srt"
+            shutil.copy(str(subtitle_file), str(temp_subtitle))
+
+            # 방법 1: force_style로 한글 폰트 지정
+            cmd = [
+                "ffmpeg",
+                "-i", str(input_video),
+                "-vf", f"subtitles={temp_subtitle.name}:force_style='FontName=Malgun Gothic,FontSize={font_size},PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BorderStyle=3,Outline=2,Shadow=1,MarginV=30'",
+                "-c:a", "copy",  # 오디오는 그대로 복사
+                "-y",
+                str(output_video)
+            ]
+
+            try:
+                # 작업 디렉토리를 비디오 파일 위치로 변경
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                    cwd=str(input_video.parent)
+                )
+                # 임시 자막 파일 삭제
+                if temp_subtitle.exists():
+                    temp_subtitle.unlink()
+                return True
+
+            except subprocess.CalledProcessError as e:
+                print(f"  ⚠️  force_style 실패, 기본 스타일로 재시도...")
+
+                # 방법 2: force_style 없이 기본 설정 사용
+                cmd_simple = [
+                    "ffmpeg",
+                    "-i", str(input_video),
+                    "-vf", f"subtitles={temp_subtitle.name}",
+                    "-c:a", "copy",
+                    "-y",
+                    str(output_video)
+                ]
+
+                result = subprocess.run(
+                    cmd_simple,
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                    cwd=str(input_video.parent)
+                )
+                # 임시 자막 파일 삭제
+                if temp_subtitle.exists():
+                    temp_subtitle.unlink()
+                return True
+
+        except subprocess.CalledProcessError as e:
+            print(f"✗ 자막 번인 에러: {e.stderr}")
+            # 임시 파일 정리
+            if 'temp_subtitle' in locals() and temp_subtitle.exists():
+                temp_subtitle.unlink()
+            return False
+        except Exception as e:
+            print(f"✗ 자막 처리 중 오류: {e}")
+            # 임시 파일 정리
+            if 'temp_subtitle' in locals() and temp_subtitle.exists():
+                temp_subtitle.unlink()
+            return False
+
+    def _render_single_clip(
+        self,
+        slide: Dict,
+        audio_info: Dict,
+        slides_img_dir: Path,
+        audio_dir: Path,
+        clips_dir: Path,
+        scripts_data: Dict,
+        enable_keyword_marking: bool
+    ) -> Optional[Path]:
+        """
+        단일 슬라이드 클립 생성 (병렬 처리용 헬퍼 함수)
+
+        Args:
+            slide: 슬라이드 정보 딕셔너리
+            audio_info: 오디오 메타데이터
+            slides_img_dir: 슬라이드 이미지 디렉토리
+            audio_dir: 오디오 디렉토리
+            clips_dir: 클립 출력 디렉토리
+            scripts_data: 대본 데이터 딕셔너리
+            enable_keyword_marking: 키워드 마킹 사용 여부
+
+        Returns:
+            생성된 클립 경로 또는 None (실패 시)
+        """
+        index = slide["index"]
+
+        # 파일 경로
+        image_path = slides_img_dir / f"slide_{index:03d}.png"
+        audio_path = audio_dir / f"slide_{index:03d}.mp3"
+        clip_path = clips_dir / f"clip_{index:03d}.mp4"
+
+        # 이미지 파일이 없으면 스킵
+        if not image_path.exists():
+            print(f"  ⚠ 슬라이드 {index}: 이미지 파일 없음 ({image_path})")
+            return None
+
+        # 오디오 파일이 없으면 스킵
+        if not audio_path.exists():
+            print(f"  ⚠ 슬라이드 {index}: 오디오 파일 없음 ({audio_path})")
+            return None
+
+        print(f"  슬라이드 {index}: 클립 생성 중...")
+
+        # 키워드 오버레이 가져오기
+        keyword_overlays = []
+        if enable_keyword_marking and index in scripts_data:
+            keyword_overlays = scripts_data[index].get("keyword_overlays", [])
+            if keyword_overlays:
+                found_count = sum(1 for kw in keyword_overlays if kw.get("found"))
+                print(f"    → 키워드 마킹 {found_count}/{len(keyword_overlays)}개 추가")
+
+        # 클립 생성
+        success = self.create_slide_clip(
+            image_path,
+            audio_path,
+            audio_info["duration"],
+            clip_path,
+            keyword_overlays=keyword_overlays,
+            enable_keyword_marking=enable_keyword_marking
+        )
+
+        if success:
+            print(f"    ✓ 완료 ({audio_info['duration']}초)")
+            return clip_path
+        else:
+            print(f"    ✗ 실패")
+            return None
+
     def render_video(
         self,
         slides_json_path: Path,
@@ -191,10 +516,15 @@ class FFmpegRenderer:
         clips_dir: Path,
         output_video_path: Path,
         scripts_json_path: Optional[Path] = None,
-        enable_text_animation: bool = False
+        enable_keyword_marking: bool = False,
+        transition_effect: str = "fade",
+        transition_duration: float = 0.5,
+        subtitle_file: Optional[Path] = None,
+        subtitle_font_size: int = 18,
+        max_workers: int = 3
     ) -> bool:
         """
-        전체 영상 렌더링
+        전체 영상 렌더링 (병렬 처리)
 
         Args:
             slides_json_path: 슬라이드 정보 JSON
@@ -203,8 +533,12 @@ class FFmpegRenderer:
             audio_dir: 오디오 디렉토리
             clips_dir: 클립 임시 디렉토리
             output_video_path: 최종 출력 영상 경로
-            scripts_json_path: 대본 정보 JSON (키워드 포함)
-            enable_text_animation: 텍스트 애니메이션 사용 여부
+            scripts_json_path: 대본 정보 JSON (키워드 오버레이 포함)
+            enable_keyword_marking: 키워드 마킹 사용 여부
+            subtitle_file: 자막 SRT 파일 경로 (선택적)
+            transition_effect: 슬라이드 전환 효과 ("none", "fade", "dissolve", "slide", "wipe")
+            transition_duration: 전환 효과 길이 (초)
+            max_workers: 최대 병렬 작업 수 (기본 3개, FFmpeg는 CPU 집약적이므로 낮게 설정)
 
         Returns:
             성공 여부
@@ -216,7 +550,7 @@ class FFmpegRenderer:
         with open(audio_meta_path, 'r', encoding='utf-8') as f:
             audio_meta = json.load(f)
 
-        # 대본 데이터 로드 (키워드 포함)
+        # 대본 데이터 로드 (키워드 오버레이 포함)
         scripts_data = {}
         if scripts_json_path and scripts_json_path.exists():
             with open(scripts_json_path, 'r', encoding='utf-8') as f:
@@ -225,54 +559,40 @@ class FFmpegRenderer:
                 scripts_data = {s["index"]: s for s in scripts_list}
 
         clips_dir.mkdir(parents=True, exist_ok=True)
-        clip_paths = []
 
-        print(f"영상 렌더링 시작: {len(slides)}개 슬라이드")
+        print(f"영상 렌더링 시작: {len(slides)}개 슬라이드 (병렬 처리: {max_workers}개 동시)")
 
-        # 슬라이드별 클립 생성
-        for i, slide in enumerate(slides):
-            index = slide["index"]
-            audio_info = audio_meta[i]
+        # 병렬 처리로 슬라이드별 클립 생성
+        clip_results = []
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # 모든 작업 제출
+            future_to_slide = {}
+            for i, slide in enumerate(slides):
+                future = executor.submit(
+                    self._render_single_clip,
+                    slide,
+                    audio_meta[i],
+                    slides_img_dir,
+                    audio_dir,
+                    clips_dir,
+                    scripts_data,
+                    enable_keyword_marking
+                )
+                future_to_slide[future] = (i, slide)
 
-            # 파일 경로
-            image_path = slides_img_dir / f"slide_{index:03d}.png"
-            audio_path = audio_dir / f"slide_{index:03d}.mp3"
-            clip_path = clips_dir / f"clip_{index:03d}.mp4"
+            # 완료되는 순서대로 결과 수집
+            for future in as_completed(future_to_slide):
+                i, slide = future_to_slide[future]
+                try:
+                    clip_path = future.result()
+                    if clip_path:
+                        clip_results.append((i, clip_path))
+                except Exception as e:
+                    print(f"    ✗ 스레드 실행 오류 (슬라이드 {slide['index']}): {e}")
 
-            # 이미지 파일이 없으면 스킵
-            if not image_path.exists():
-                print(f"  ⚠ 슬라이드 {index}: 이미지 파일 없음 ({image_path})")
-                continue
-
-            # 오디오 파일이 없으면 스킵
-            if not audio_path.exists():
-                print(f"  ⚠ 슬라이드 {index}: 오디오 파일 없음 ({audio_path})")
-                continue
-
-            print(f"  슬라이드 {index}: 클립 생성 중...")
-
-            # 키워드 가져오기
-            keywords = []
-            if enable_text_animation and index in scripts_data:
-                keywords = scripts_data[index].get("keywords", [])
-                if keywords:
-                    print(f"    → 키워드 {len(keywords)}개 애니메이션 추가")
-
-            # 클립 생성
-            success = self.create_slide_clip(
-                image_path,
-                audio_path,
-                audio_info["duration"],
-                clip_path,
-                keywords=keywords,
-                enable_text_animation=enable_text_animation
-            )
-
-            if success:
-                clip_paths.append(clip_path)
-                print(f"    ✓ 완료 ({audio_info['duration']}초)")
-            else:
-                print(f"    ✗ 실패")
+        # index 순서대로 정렬
+        clip_results.sort(key=lambda x: x[0])
+        clip_paths = [clip_path for _, clip_path in clip_results]
 
         if not clip_paths:
             print("✗ 생성된 클립이 없습니다.")
@@ -280,9 +600,44 @@ class FFmpegRenderer:
 
         # 클립 연결
         print(f"\n클립 연결 중: {len(clip_paths)}개 클립")
-        success = self.concatenate_clips(clip_paths, output_video_path)
+
+        if transition_effect != "none" and transition_duration > 0:
+            print(f"  - 전환 효과: {transition_effect} ({transition_duration}초)")
+            success = self.concatenate_clips_with_transition(
+                clip_paths, output_video_path, transition_effect, transition_duration
+            )
+        else:
+            success = self.concatenate_clips(clip_paths, output_video_path)
 
         if success:
+            # 자막 추가 (선택적)
+            if subtitle_file and subtitle_file.exists():
+                print(f"\n자막 추가 중: {subtitle_file.name}")
+                temp_video = output_video_path.parent / f"{output_video_path.stem}_no_subs.mp4"
+
+                try:
+                    # 원본을 임시 파일로 이동
+                    shutil.move(str(output_video_path), str(temp_video))
+
+                    subtitle_success = self.burn_subtitles(temp_video, subtitle_file, output_video_path, subtitle_font_size)
+
+                    if subtitle_success:
+                        print(f"  ✓ 자막 추가 완료")
+                        # 임시 파일 삭제
+                        if temp_video.exists():
+                            temp_video.unlink()
+                    else:
+                        print(f"  ✗ 자막 추가 실패, 자막 없는 영상 사용")
+                        # 실패 시 원본 복구
+                        if temp_video.exists():
+                            shutil.move(str(temp_video), str(output_video_path))
+
+                except Exception as e:
+                    print(f"  ✗ 자막 처리 중 오류: {e}")
+                    # 오류 발생 시 원본 복구 시도
+                    if temp_video.exists() and not output_video_path.exists():
+                        shutil.move(str(temp_video), str(output_video_path))
+
             print(f"✓ 영상 렌더링 완료: {output_video_path}")
 
             # 최종 영상 정보 출력

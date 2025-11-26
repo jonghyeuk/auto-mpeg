@@ -21,6 +21,8 @@ from app.modules.pdf_parser import PDFParser
 from app.modules.script_generator import ScriptGenerator
 from app.modules.tts_client import TTSClient
 from app.modules.ffmpeg_renderer import FFmpegRenderer
+from app.modules.keyword_marker import KeywordMarker
+from app.modules.subtitle_generator import SubtitleGenerator
 
 
 class GradioUI:
@@ -264,12 +266,17 @@ class GradioUI:
             log_output = self.log("", log_output)
             return "", log_output
 
-    def generate_script_with_thinking(self, slide, context, slide_num, total_slides, target_duration, progress, log_output):
+    def generate_script_with_thinking(self, slide, context, slide_num, total_slides, target_duration, progress, log_output,
+                                     custom_request="", slide_image_path=None, pdf_path=None, page_num=None, enable_keyword_marking=True, keyword_mark_style="circle"):
         """
         개별 슬라이드 대본 생성 (사고 과정 포함)
 
         Args:
             target_duration: 이 슬라이드의 목표 시간 (초)
+            slide_image_path: 슬라이드 이미지 경로 (키워드 마킹용)
+            pdf_path: PDF 파일 경로 (PDF인 경우)
+            page_num: 페이지 번호 (0부터 시작)
+            enable_keyword_marking: 키워드 마킹 활성화 여부
         """
         from anthropic import Anthropic
 
@@ -290,10 +297,34 @@ class GradioUI:
         try:
             client = Anthropic(api_key=config.ANTHROPIC_API_KEY)
 
-            prompt = f"""당신은 학생들을 가르치는 친절한 **강사**입니다.
+            # 슬라이드 위치에 따른 프롬프트 조정
+            if slide_num == 1:
+                intro_instruction = """당신은 학생들을 가르치는 친절한 **강사**입니다.
 다음 슬라이드를 보면서 학생들에게 내용을 **가르쳐주세요**.
 단순히 텍스트를 읽는 것이 아니라, 강의실에서 학생들 앞에 서서
 자연스럽게 설명하듯이 말해야 합니다.
+
+**이것은 프레젠테이션의 첫 번째 슬라이드입니다.**
+간단한 인사말로 시작하고 바로 주제로 들어가세요.
+
+⚠️  **절대 금지 사항**:
+- ❌ "저는 교수 ○○○입니다", "제 이름은..." 같은 자기소개 금지
+- ❌ "이번 학기 이 과목을 가르칠..." 같은 역할 소개 금지
+- ✅ "안녕하세요, 오늘은 [주제]에 대해 알아보겠습니다" 식으로 바로 내용 시작"""
+            else:
+                intro_instruction = f"""당신은 학생들을 가르치는 친절한 **강사**입니다.
+다음 슬라이드를 보면서 학생들에게 내용을 **가르쳐주세요**.
+단순히 텍스트를 읽는 것이 아니라, 강의실에서 학생들 앞에 서서
+자연스럽게 설명하듯이 말해야 합니다.
+
+**이것은 프레젠테이션의 {slide_num}번째 슬라이드입니다 (총 {total_slides}개).**
+이전 슬라이드에서 이어지는 내용이므로:
+- ❌ "안녕하세요", "반갑습니다" 같은 인사말 사용 금지
+- ❌ 주제를 처음 소개하듯이 말하지 말 것
+- ✅ 이전 내용에서 자연스럽게 이어지도록 작성
+- ✅ "다음으로~", "이어서~", "그럼 이제~" 같은 연결 표현 사용"""
+
+            prompt = f"""{intro_instruction}
 
 【전체 프레젠테이션 맥락】
 {context}
@@ -304,6 +335,9 @@ class GradioUI:
 {slide.get('body', '')}
 {f"발표자 노트: {slide.get('notes', '')}" if slide.get('notes') else ''}
 
+{f'''【사용자 요청사항】
+{custom_request}
+''' if custom_request and custom_request.strip() else ''}
 【강사로서 반드시 지켜야 할 사항】
 1. ✅ **슬라이드의 모든 내용을 빠짐없이 설명**하세요
    - 제목, 본문, 그림, 도표, 차트 등 모든 시각적 요소 포함
@@ -330,7 +364,12 @@ class GradioUI:
 4. 어떤 비유나 예시를 사용하여 쉽게 설명할지
 
 그 다음 <keywords> 태그 안에:
-- 이 슬라이드의 **핵심 키워드 2-3개**를 선정
+- ⚠️  **매우 중요**: 슬라이드 본문에 **실제로 보이는 텍스트**만 키워드로 선택하세요
+- 슬라이드 제목이나 본문에 **정확히 있는 단어/구절**을 2-3개 선택
+- 개념을 설명하는 단어가 아니라, **화면에 표시된 그대로의 텍스트**를 선택
+- 예시:
+  - ✅ 좋은 예: "반도체 8대공정" (슬라이드에 실제로 있음)
+  - ❌ 나쁜 예: "공정 개요" (설명을 위해 만든 단어)
 - 각 키워드가 대본에서 언급되는 대략적인 시점(초)을 예측
 - 형식: "키워드|시점초" (예: "머신러닝|2.5")
 - 한 줄에 하나씩 작성
@@ -401,11 +440,36 @@ class GradioUI:
                 log_output = self.log("└─────────────────────────────────────────┘", log_output)
                 log_output = self.log("", log_output)
 
-            # 핵심 키워드 표시
+            # 핵심 키워드 표시 및 타이밍 자동 보정
             if keywords:
                 log_output = self.log("🔑 핵심 키워드 (텍스트 애니메이션):", log_output)
+
+                # 타이밍 자동 계산: 대본에서 키워드가 실제로 나오는 위치 기반
+                estimated_duration = len(script) / 3.5  # 예상 TTS 길이
                 for kw in keywords:
-                    log_output = self.log(f"  - {kw['text']} ({kw['timing']:.1f}초)", log_output)
+                    # 대본에서 키워드 위치 찾기
+                    keyword_text = kw['text'].strip()
+                    keyword_pos = script.find(keyword_text)
+
+                    if keyword_pos >= 0:
+                        # 키워드 위치 기반 타이밍 계산
+                        char_ratio = keyword_pos / max(len(script), 1)
+                        calculated_timing = char_ratio * estimated_duration
+
+                        # LLM이 제공한 타이밍과 비교
+                        original_timing = kw['timing']
+                        diff = abs(calculated_timing - original_timing)
+
+                        # 차이가 3초 이상이면 자동 보정
+                        if diff > 3.0:
+                            log_output = self.log(f"  - {kw['text']}: {original_timing:.1f}초 → {calculated_timing:.1f}초 (자동 보정)", log_output)
+                            kw['timing'] = calculated_timing
+                        else:
+                            log_output = self.log(f"  - {kw['text']} ({kw['timing']:.1f}초)", log_output)
+                    else:
+                        # 대본에서 찾지 못한 경우 원래 타이밍 유지
+                        log_output = self.log(f"  - {kw['text']} ({kw['timing']:.1f}초) ⚠️ 대본에서 미발견", log_output)
+
                 log_output = self.log("", log_output)
             else:
                 log_output = self.log("⚠️  키워드가 추출되지 않았습니다 (텍스트 애니메이션 없음)", log_output)
@@ -438,7 +502,41 @@ class GradioUI:
 
             log_output = self.log("", log_output)
 
-            return script, keywords, log_output
+            # 키워드 마킹 수행
+            keyword_overlays = []
+            if enable_keyword_marking and keywords and slide_image_path:
+                try:
+                    log_output = self.log("🎯 키워드 마킹 시작:", log_output)
+
+                    # KeywordMarker 초기화 (OCR 사용)
+                    marker = KeywordMarker(use_ocr=True)
+
+                    # 마킹 결과 저장 디렉토리
+                    overlay_dir = config.META_DIR / f"overlays_slide_{slide_num:03d}"
+
+                    # 키워드 마킹 수행
+                    keyword_overlays = marker.mark_keywords_on_slide(
+                        slide_image_path=str(slide_image_path),
+                        keywords=keywords,
+                        output_dir=overlay_dir,
+                        pdf_path=pdf_path,
+                        page_num=page_num,
+                        mark_style=keyword_mark_style,  # UI에서 선택한 스타일
+                        create_overlay=True  # 투명 오버레이 생성
+                    )
+
+                    # 결과 로깅
+                    found_count = sum(1 for kw in keyword_overlays if kw.get("found"))
+                    log_output = self.log(f"  ✓ 키워드 마킹 완료: {found_count}/{len(keywords)}개 찾음", log_output)
+                    log_output = self.log("", log_output)
+
+                except Exception as e:
+                    log_output = self.log(f"  ⚠️  키워드 마킹 실패: {str(e)}", log_output)
+                    log_output = self.log("  → 키워드 마킹 없이 진행합니다", log_output)
+                    log_output = self.log("", log_output)
+                    keyword_overlays = []
+
+            return script, keywords, keyword_overlays, log_output
 
         except Exception as e:
             log_output = self.log(f"❌ 대본 생성 실패: {str(e)}", log_output)
@@ -451,16 +549,82 @@ class GradioUI:
             log_output = self.log(f"⚠️  경고: 폴백 대본 사용 (PPT 원문)", log_output)
             log_output = self.log(f"→ {fallback_script[:50]}...", log_output)
             log_output = self.log("", log_output)
-            return fallback_script, [], log_output
+            return fallback_script, [], [], log_output
+
+    def convert_ppt_to_video_router(
+        self,
+        pptx_file,
+        output_name,
+        custom_request,
+        conversion_mode,
+        voice_choice,
+        resolution_choice,
+        total_duration_minutes,
+        enable_keyword_marking,
+        keyword_mark_style,
+        enable_subtitles,
+        subtitle_font_size,
+        transition_effect,
+        transition_duration,
+        video_quality,
+        encoding_speed,
+        progress=gr.Progress()
+    ):
+        """
+        모드에 따라 적절한 워크플로우로 라우팅 (Generator)
+
+        Args:
+            conversion_mode: "ppt-to-mpeg" 또는 "ppt-reactant-mpeg"
+        """
+        if conversion_mode == "ppt-reactant-mpeg":
+            # 새 모드: Reactant 워크플로우
+            from app.reactant.workflow import ReactantWorkflow
+
+            workflow = ReactantWorkflow()
+            yield from workflow.convert_ppt_to_reactant_video(
+                pptx_file=pptx_file,
+                output_name=output_name,
+                custom_request=custom_request,
+                voice_choice=voice_choice,
+                total_duration_minutes=float(total_duration_minutes),
+                progress=progress
+            )
+        else:
+            # 기존 모드: 기본 워크플로우
+            yield from self.convert_ppt_to_video(
+                pptx_file=pptx_file,
+                output_name=output_name,
+                custom_request=custom_request,
+                voice_choice=voice_choice,
+                resolution_choice=resolution_choice,
+                total_duration_minutes=total_duration_minutes,
+                enable_keyword_marking=enable_keyword_marking,
+                keyword_mark_style=keyword_mark_style,
+                enable_subtitles=enable_subtitles,
+                subtitle_font_size=subtitle_font_size,
+                transition_effect=transition_effect,
+                transition_duration=transition_duration,
+                video_quality=video_quality,
+                encoding_speed=encoding_speed,
+                progress=progress
+            )
 
     def convert_ppt_to_video(
         self,
         pptx_file,
         output_name,
+        custom_request,
         voice_choice,
         resolution_choice,
         total_duration_minutes,
-        enable_text_animation,
+        enable_keyword_marking,
+        keyword_mark_style,
+        enable_subtitles,
+        subtitle_font_size,
+        transition_effect,
+        transition_duration,
+        video_quality,
+        encoding_speed,
         progress=gr.Progress()
     ):
         """
@@ -537,11 +701,13 @@ class GradioUI:
                 # PDF 파일 처리
                 parser = PDFParser(str(pptx_path))
                 slides = parser.parse(slides_json, config.SLIDES_IMG_DIR)
+                self.current_pdf_path = str(pptx_path)  # 키워드 마킹용 PDF 경로 저장
                 log_output = self.log(f"✅ PDF 파싱 완료: {len(slides)}개 페이지", log_output)
             else:
                 # PPTX 파일 처리
                 parser = PPTParser(str(pptx_path))
                 slides = parser.parse(slides_json, config.SLIDES_IMG_DIR)
+                self.current_pdf_path = None  # PPT는 PDF 경로 없음
                 log_output = self.log(f"✅ PPT 파싱 완료: {len(slides)}개 슬라이드", log_output)
 
             log_output = self.log("", log_output)
@@ -601,20 +767,35 @@ class GradioUI:
                 progress_pct = 0.2 + (0.4 * (i + 1) / len(slides))
                 progress(progress_pct, desc=f"대본 생성 중... ({i+1}/{len(slides)})")
 
-                script, keywords, log_output = self.generate_script_with_thinking(
+                # 슬라이드 이미지 경로 (키워드 마킹용)
+                slide_image_path = config.SLIDES_IMG_DIR / f"slide_{slide['index']:03d}.png"
+
+                # PDF 파일 정보 (PDF인 경우)
+                pdf_file_path = None
+                if hasattr(self, 'current_pdf_path'):
+                    pdf_file_path = self.current_pdf_path
+
+                script, keywords, keyword_overlays, log_output = self.generate_script_with_thinking(
                     slide,
                     context_analysis,
                     i + 1,
                     len(slides),
                     slides_per_duration,  # 각 슬라이드 목표 시간
                     progress,
-                    log_output
+                    log_output,
+                    custom_request=custom_request,
+                    slide_image_path=slide_image_path if slide_image_path.exists() else None,
+                    pdf_path=pdf_file_path,
+                    page_num=i,  # 0부터 시작
+                    enable_keyword_marking=enable_keyword_marking,
+                    keyword_mark_style=keyword_mark_style
                 )
 
                 scripts_data.append({
                     "index": slide["index"],
                     "script": script,
-                    "keywords": keywords  # 텍스트 애니메이션용 키워드
+                    "keywords": keywords,  # 기존 키워드 (호환성 유지)
+                    "keyword_overlays": keyword_overlays  # 새로운 키워드 오버레이
                 })
 
                 yield log_output, None
@@ -659,7 +840,105 @@ class GradioUI:
             total_duration = sum(item['duration'] for item in audio_meta)
             log_output = self.log(f"✅ TTS 생성 완료: {len(audio_meta)}개 오디오 ({total_duration:.1f}초)", log_output)
             log_output = self.log("", log_output)
+
+            # TTS 생성 후 키워드 타이밍을 실제 TTS 길이로 재조정
+            log_output = self.log("⏱️  키워드 타이밍 재조정 (실제 TTS 길이 기준):", log_output)
+            timing_adjusted = False
+            for i, script_item in enumerate(scripts_data):
+                if i >= len(audio_meta):
+                    continue
+
+                actual_duration = audio_meta[i]['duration']
+                script_text = script_item['script']
+                keyword_overlays = script_item.get('keyword_overlays', [])
+
+                if not keyword_overlays:
+                    continue
+
+                # 예상 길이 (글자 수 기반)
+                estimated_duration = len(script_text) / 3.5
+
+                # 실제 길이와 예상 길이 비교
+                if abs(actual_duration - estimated_duration) > 2.0:  # 2초 이상 차이
+                    timing_adjusted = True
+                    log_output = self.log(f"  슬라이드 {i+1}: 예상 {estimated_duration:.1f}초 → 실제 {actual_duration:.1f}초", log_output)
+
+                    # 키워드 타이밍 재계산
+                    for kw_overlay in keyword_overlays:
+                        if not kw_overlay.get('found'):
+                            continue
+
+                        keyword_text = kw_overlay['keyword']
+                        old_timing = kw_overlay['timing']
+
+                        # 대본에서 키워드 위치 찾기
+                        keyword_pos = script_text.find(keyword_text)
+                        if keyword_pos >= 0:
+                            # 실제 TTS 길이 기준으로 타이밍 재계산
+                            char_ratio = keyword_pos / max(len(script_text), 1)
+                            new_timing = char_ratio * actual_duration
+
+                            # 타이밍 업데이트
+                            kw_overlay['timing'] = new_timing
+                            log_output = self.log(f"    - '{keyword_text}': {old_timing:.1f}초 → {new_timing:.1f}초", log_output)
+
+            if timing_adjusted:
+                # 재조정된 타이밍으로 scripts.json 업데이트
+                with open(scripts_json, 'w', encoding='utf-8') as f:
+                    json.dump(scripts_data, f, ensure_ascii=False, indent=2)
+                log_output = self.log(f"  ✓ 타이밍 재조정 완료 및 저장", log_output)
+            else:
+                log_output = self.log(f"  ✓ 타이밍 조정 불필요 (예상과 실제 길이 유사)", log_output)
+
+            log_output = self.log("", log_output)
             yield log_output, None
+
+            # ===== STEP 4.5: 자막 생성 (선택적) =====
+            subtitle_file = None
+            if enable_subtitles:
+                log_output = self.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", log_output)
+                log_output = self.log("📝 자막 생성 중...", log_output)
+                log_output = self.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", log_output)
+                log_output = self.log("", log_output)
+                yield log_output, None
+
+                try:
+                    subtitle_generator = SubtitleGenerator()
+                    subtitle_file = config.META_DIR / f"{output_name}.srt"
+
+                    # audio_meta에서 스크립트와 타이밍 정보 추출
+                    # start_time은 이전 슬라이드들의 duration을 누적해서 계산
+                    subtitle_data = []
+                    current_time = 0.0
+                    for item in audio_meta:
+                        subtitle_data.append({
+                            "script": item.get("script", ""),
+                            "start_time": current_time,
+                            "duration": item.get("duration", 0.0)
+                        })
+                        current_time += item.get("duration", 0.0)
+
+                    success = subtitle_generator.generate_srt(subtitle_data, subtitle_file)
+
+                    if success:
+                        log_output = self.log(f"✅ 자막 생성 완료: {subtitle_file.name}", log_output)
+                        # 자막 데이터 통계 출력
+                        total_subtitle_chars = sum(len(item.get("script", "")) for item in subtitle_data)
+                        log_output = self.log(f"  - 슬라이드 수: {len(subtitle_data)}개", log_output)
+                        log_output = self.log(f"  - 총 글자 수: {total_subtitle_chars}자", log_output)
+                    else:
+                        log_output = self.log("⚠️  자막 생성 실패, 자막 없이 진행합니다", log_output)
+                        subtitle_file = None
+
+                    log_output = self.log("", log_output)
+                    yield log_output, None
+
+                except Exception as e:
+                    log_output = self.log(f"⚠️  자막 생성 중 오류: {str(e)}", log_output)
+                    log_output = self.log("→ 자막 없이 진행합니다", log_output)
+                    log_output = self.log("", log_output)
+                    subtitle_file = None
+                    yield log_output, None
 
             # ===== STEP 5: 영상 렌더링 =====
             progress(0.75, desc="영상 렌더링 중...")
@@ -669,12 +948,24 @@ class GradioUI:
             log_output = self.log("", log_output)
             yield log_output, None
 
+            # 영상 품질 매핑 (CRF: 낮을수록 고품질)
+            quality_map = {"high": 18, "medium": 23, "low": 28}
+            crf_value = quality_map.get(video_quality, 23)
+
+            # 인코딩 속도 매핑
+            preset_value = encoding_speed  # "fast", "medium", "slow"
+
+            log_output = self.log(f"  - 영상 품질: {video_quality} (CRF: {crf_value})", log_output)
+            log_output = self.log(f"  - 인코딩 속도: {encoding_speed}", log_output)
+            log_output = self.log(f"  - 전환 효과: {transition_effect} ({transition_duration}초)", log_output)
+            log_output = self.log("", log_output)
+
             renderer = FFmpegRenderer(
                 width=width,
                 height=height,
                 fps=config.VIDEO_FPS,
-                preset=config.FFMPEG_PRESET,
-                crf=config.FFMPEG_CRF
+                preset=preset_value,
+                crf=crf_value
             )
 
             success = renderer.render_video(
@@ -685,7 +976,11 @@ class GradioUI:
                 config.CLIPS_DIR,
                 final_video,
                 scripts_json_path=scripts_json,
-                enable_text_animation=enable_text_animation
+                enable_keyword_marking=enable_keyword_marking,  # 키워드 마킹 활성화
+                transition_effect=transition_effect,
+                transition_duration=transition_duration,
+                subtitle_file=subtitle_file,  # 자막 파일 (선택적)
+                subtitle_font_size=int(subtitle_font_size)  # 자막 크기
             )
 
             if not success:
@@ -775,6 +1070,26 @@ class GradioUI:
                         value="output_video"
                     )
 
+                    custom_request = gr.Textbox(
+                        label="요청사항 (선택)",
+                        placeholder="예: 초등학생도 이해할 수 있게 쉽게 설명해주세요",
+                        lines=2,
+                        value="",
+                        info="대본 생성 시 반영할 요청사항 (비워두면 기본 스타일로 생성)"
+                    )
+
+                    gr.Markdown("### 🎯 변환 모드 선택")
+
+                    conversion_mode = gr.Radio(
+                        choices=[
+                            ("기본 모드 (PPT → MPEG)", "ppt-to-mpeg"),
+                            ("리액턴트 모드 (인터랙티브 웹 스타일)", "ppt-reactant-mpeg")
+                        ],
+                        value="ppt-to-mpeg",
+                        label="변환 모드",
+                        info="기본: 슬라이드 순차 재생 | 리액턴트: TTS 싱크 텍스트 애니메이션 + 이미지"
+                    )
+
                     # 슬라이드 개수 표시 (숨김)
                     slide_count_state = gr.State(value=0)
 
@@ -800,10 +1115,71 @@ class GradioUI:
                         info="1080p 권장"
                     )
 
-                    enable_text_animation = gr.Checkbox(
-                        label="🔤 텍스트 애니메이션 사용",
+                    gr.Markdown("### 🎯 키워드 마킹 옵션")
+
+                    enable_keyword_marking = gr.Checkbox(
+                        label="키워드 마킹 활성화",
                         value=True,
-                        info="핵심 키워드를 화면에 fade in/out 효과로 표시"
+                        info="슬라이드에서 중요 키워드를 찾아 표시"
+                    )
+
+                    keyword_mark_style = gr.Radio(
+                        choices=["random"],
+                        value="random",
+                        label="마킹 스타일",
+                        info="각 키워드마다 랜덤하게 동그라미 또는 밑줄로 표시",
+                        interactive=False
+                    )
+
+                    gr.Markdown("### 📝 자막 옵션")
+
+                    enable_subtitles = gr.Checkbox(
+                        label="자막 활성화",
+                        value=True,
+                        info="영상에 한글 자막 표시"
+                    )
+
+                    subtitle_font_size = gr.Slider(
+                        minimum=12,
+                        maximum=32,
+                        value=18,
+                        step=2,
+                        label="자막 크기",
+                        info="폰트 크기 (12=작게, 18=보통, 24=크게)"
+                    )
+
+                    gr.Markdown("### 🎞️ 전환 효과 옵션")
+
+                    transition_effect = gr.Dropdown(
+                        choices=["none", "fade", "dissolve", "slide", "wipe"],
+                        value="fade",
+                        label="슬라이드 전환 효과",
+                        info="슬라이드 간 전환 애니메이션 (fade 추천)"
+                    )
+
+                    transition_duration = gr.Slider(
+                        minimum=0.0,
+                        maximum=2.0,
+                        value=0.5,
+                        step=0.1,
+                        label="전환 효과 길이 (초)",
+                        info="0 = 전환 없음, 0.5초 권장"
+                    )
+
+                    gr.Markdown("### ⚙️ 고급 옵션")
+
+                    video_quality = gr.Dropdown(
+                        choices=["high", "medium", "low"],
+                        value="medium",
+                        label="영상 품질",
+                        info="high = 큰 파일, low = 작은 파일"
+                    )
+
+                    encoding_speed = gr.Dropdown(
+                        choices=["fast", "medium", "slow"],
+                        value="medium",
+                        label="인코딩 속도",
+                        info="fast = 빠르지만 큰 파일, slow = 느리지만 작은 파일"
                     )
 
                     convert_btn = gr.Button("🎬 영상 생성", variant="primary", size="lg")
@@ -840,8 +1216,24 @@ class GradioUI:
 
             # 버튼 클릭 이벤트
             convert_btn.click(
-                fn=self.convert_ppt_to_video,
-                inputs=[pptx_input, output_name, voice_choice, resolution_choice, total_duration, enable_text_animation],
+                fn=self.convert_ppt_to_video_router,
+                inputs=[
+                    pptx_input,
+                    output_name,
+                    custom_request,
+                    conversion_mode,
+                    voice_choice,
+                    resolution_choice,
+                    total_duration,
+                    enable_keyword_marking,
+                    keyword_mark_style,
+                    enable_subtitles,
+                    subtitle_font_size,
+                    transition_effect,
+                    transition_duration,
+                    video_quality,
+                    encoding_speed
+                ],
                 outputs=[progress_output, video_output]
             )
 
@@ -889,14 +1281,17 @@ def main():
     print("🚀 PPT to Video Converter - Gradio UI (상세 버전)")
     print("=" * 60)
     print()
-    print("브라우저에서 http://localhost:7860 으로 접속하세요")
+    print("브라우저에서 http://localhost:7861 으로 접속하세요")
     print("종료하려면 Ctrl+C를 누르세요")
     print()
 
     # Gradio 앱 실행
+    # Queue 활성화: 긴 작업(TTS, 렌더링) 처리 시 웹소켓 연결 유지
+    demo.queue(max_size=20)
+
     demo.launch(
         server_name="0.0.0.0",
-        server_port=7860,
+        server_port=7861,
         share=False,
         show_error=True,
         quiet=False

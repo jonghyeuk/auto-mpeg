@@ -8,6 +8,7 @@ from typing import List, Dict, Any
 import os
 from openai import OpenAI
 import subprocess
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
 class TTSClient:
@@ -102,19 +103,75 @@ class TTSClient:
             # 폴백: 대략적인 길이 추정 (150 words/min)
             return 10.0
 
+    def _process_single_script(
+        self,
+        script: Dict,
+        output_audio_dir: Path,
+        output_meta_path: Path
+    ) -> Dict[str, Any]:
+        """
+        단일 스크립트 처리 (병렬 처리용 헬퍼 함수)
+
+        Args:
+            script: 스크립트 딕셔너리 {"index": 1, "script": "텍스트"}
+            output_audio_dir: 출력 오디오 디렉토리
+            output_meta_path: 메타데이터 경로 (상대 경로 계산용)
+
+        Returns:
+            오디오 메타데이터 딕셔너리
+        """
+        index = script["index"]
+        text = script["script"]
+
+        # 오디오 파일 경로
+        audio_filename = f"slide_{index:03d}.mp3"
+        audio_path = output_audio_dir / audio_filename
+
+        print(f"  슬라이드 {index}: TTS 생성 중...")
+
+        try:
+            # TTS 생성
+            if self.provider == "openai":
+                duration = self.text_to_speech_openai(text, audio_path)
+            else:
+                raise NotImplementedError(f"{self.provider} TTS는 아직 구현되지 않았습니다")
+
+            audio_info = {
+                "index": index,
+                "audio": str(audio_path.relative_to(output_meta_path.parent.parent)),
+                "duration": round(duration, 2),
+                "script": text  # 자막 생성용
+            }
+
+            print(f"    ✓ 완료 ({duration:.1f}초)")
+            return audio_info
+
+        except Exception as e:
+            print(f"    ✗ 실패: {e}")
+            # 실패한 경우 더미 데이터 반환
+            return {
+                "index": index,
+                "audio": str(audio_path),
+                "duration": 10.0,
+                "script": text,
+                "error": str(e)
+            }
+
     def generate_audio(
         self,
         scripts_json_path: Path,
         output_audio_dir: Path,
-        output_meta_path: Path
+        output_meta_path: Path,
+        max_workers: int = 5
     ) -> List[Dict[str, Any]]:
         """
-        모든 대본에 대한 오디오 파일 생성
+        모든 대본에 대한 오디오 파일 생성 (병렬 처리)
 
         Args:
             scripts_json_path: 대본 JSON 파일 경로
             output_audio_dir: 출력 오디오 디렉토리
             output_meta_path: 오디오 메타데이터 JSON 파일 경로
+            max_workers: 최대 병렬 작업 수 (기본 5개)
 
         Returns:
             오디오 메타데이터 리스트
@@ -125,46 +182,40 @@ class TTSClient:
 
         output_audio_dir.mkdir(parents=True, exist_ok=True)
 
+        print(f"TTS 생성 시작: {len(scripts)}개 대본 (병렬 처리: {max_workers}개 동시)")
+
+        # 병렬 처리로 TTS 생성
         audio_meta = []
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # 모든 작업 제출
+            future_to_script = {
+                executor.submit(
+                    self._process_single_script,
+                    script,
+                    output_audio_dir,
+                    output_meta_path
+                ): script for script in scripts
+            }
 
-        print(f"TTS 생성 시작: {len(scripts)}개 대본")
+            # 완료되는 순서대로 결과 수집
+            for future in as_completed(future_to_script):
+                script = future_to_script[future]
+                try:
+                    audio_info = future.result()
+                    audio_meta.append(audio_info)
+                except Exception as e:
+                    print(f"    ✗ 스레드 실행 오류 (슬라이드 {script['index']}): {e}")
+                    # 실패한 경우에도 더미 데이터 추가
+                    audio_meta.append({
+                        "index": script["index"],
+                        "audio": f"slide_{script['index']:03d}.mp3",
+                        "duration": 10.0,
+                        "script": script["script"],
+                        "error": str(e)
+                    })
 
-        for script in scripts:
-            index = script["index"]
-            text = script["script"]
-
-            # 오디오 파일 경로
-            audio_filename = f"slide_{index:03d}.mp3"
-            audio_path = output_audio_dir / audio_filename
-
-            print(f"  슬라이드 {index}: TTS 생성 중...")
-
-            try:
-                # TTS 생성
-                if self.provider == "openai":
-                    duration = self.text_to_speech_openai(text, audio_path)
-                else:
-                    raise NotImplementedError(f"{self.provider} TTS는 아직 구현되지 않았습니다")
-
-                audio_info = {
-                    "index": index,
-                    "audio": str(audio_path.relative_to(output_meta_path.parent.parent)),
-                    "duration": round(duration, 2)
-                }
-
-                audio_meta.append(audio_info)
-
-                print(f"    ✓ 완료 ({duration:.1f}초)")
-
-            except Exception as e:
-                print(f"    ✗ 실패: {e}")
-                # 실패한 경우 더미 데이터 추가
-                audio_meta.append({
-                    "index": index,
-                    "audio": str(audio_path),
-                    "duration": 10.0,
-                    "error": str(e)
-                })
+        # index 순서대로 정렬
+        audio_meta.sort(key=lambda x: x["index"])
 
         # 메타데이터 JSON 저장
         output_meta_path.parent.mkdir(parents=True, exist_ok=True)
