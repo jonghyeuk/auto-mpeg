@@ -571,7 +571,7 @@ class GradioUI:
         progress=gr.Progress()
     ):
         """
-        모드에 따라 적절한 워크플로우로 라우팅
+        모드에 따라 적절한 워크플로우로 라우팅 (Generator)
 
         Args:
             conversion_mode: "ppt-to-mpeg" 또는 "ppt-reactant-mpeg"
@@ -581,7 +581,7 @@ class GradioUI:
             from app.reactant.workflow import ReactantWorkflow
 
             workflow = ReactantWorkflow()
-            return workflow.convert_ppt_to_reactant_video(
+            yield from workflow.convert_ppt_to_reactant_video(
                 pptx_file=pptx_file,
                 output_name=output_name,
                 custom_request=custom_request,
@@ -591,7 +591,7 @@ class GradioUI:
             )
         else:
             # 기존 모드: 기본 워크플로우
-            return self.convert_ppt_to_video(
+            yield from self.convert_ppt_to_video(
                 pptx_file=pptx_file,
                 output_name=output_name,
                 custom_request=custom_request,
