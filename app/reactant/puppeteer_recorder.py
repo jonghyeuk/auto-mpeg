@@ -39,6 +39,8 @@ def record_html_to_video(html_path: Path, output_video: Path, duration: float = 
             ['node', str(temp_script_path)],
             capture_output=True,
             text=True,
+            encoding='utf-8',  # Windows cp949 인코딩 문제 방지
+            errors='replace',  # 디코딩 에러 시 대체 문자 사용
             timeout=duration + 60,  # 녹화 시간 + 여유 시간
             cwd=str(project_root)  # 프로젝트 루트에서 실행
         )
@@ -78,7 +80,7 @@ const {{ execSync }} = require('child_process');
 
     const browser = await puppeteer.launch({{
         headless: true,
-        executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/google-chrome-stable',
+        // executablePath 제거 - Puppeteer가 자동으로 Chromium 사용 (Windows/Linux 모두 지원)
         args: [
             '--no-sandbox',
             '--disable-setuid-sandbox',
