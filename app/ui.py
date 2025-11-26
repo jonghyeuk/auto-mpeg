@@ -551,6 +551,64 @@ class GradioUI:
             log_output = self.log("", log_output)
             return fallback_script, [], [], log_output
 
+    def convert_ppt_to_video_router(
+        self,
+        pptx_file,
+        output_name,
+        custom_request,
+        conversion_mode,
+        voice_choice,
+        resolution_choice,
+        total_duration_minutes,
+        enable_keyword_marking,
+        keyword_mark_style,
+        enable_subtitles,
+        subtitle_font_size,
+        transition_effect,
+        transition_duration,
+        video_quality,
+        encoding_speed,
+        progress=gr.Progress()
+    ):
+        """
+        모드에 따라 적절한 워크플로우로 라우팅
+
+        Args:
+            conversion_mode: "ppt-to-mpeg" 또는 "ppt-reactant-mpeg"
+        """
+        if conversion_mode == "ppt-reactant-mpeg":
+            # 새 모드: Reactant 워크플로우
+            from app.reactant.workflow import ReactantWorkflow
+
+            workflow = ReactantWorkflow()
+            return workflow.convert_ppt_to_reactant_video(
+                pptx_file=pptx_file,
+                output_name=output_name,
+                custom_request=custom_request,
+                voice_choice=voice_choice,
+                total_duration_minutes=float(total_duration_minutes),
+                progress=progress
+            )
+        else:
+            # 기존 모드: 기본 워크플로우
+            return self.convert_ppt_to_video(
+                pptx_file=pptx_file,
+                output_name=output_name,
+                custom_request=custom_request,
+                voice_choice=voice_choice,
+                resolution_choice=resolution_choice,
+                total_duration_minutes=total_duration_minutes,
+                enable_keyword_marking=enable_keyword_marking,
+                keyword_mark_style=keyword_mark_style,
+                enable_subtitles=enable_subtitles,
+                subtitle_font_size=subtitle_font_size,
+                transition_effect=transition_effect,
+                transition_duration=transition_duration,
+                video_quality=video_quality,
+                encoding_speed=encoding_speed,
+                progress=progress
+            )
+
     def convert_ppt_to_video(
         self,
         pptx_file,
@@ -1020,6 +1078,18 @@ class GradioUI:
                         info="대본 생성 시 반영할 요청사항 (비워두면 기본 스타일로 생성)"
                     )
 
+                    gr.Markdown("### 🎯 변환 모드 선택")
+
+                    conversion_mode = gr.Radio(
+                        choices=[
+                            ("기본 모드 (PPT → MPEG)", "ppt-to-mpeg"),
+                            ("리액턴트 모드 (인터랙티브 웹 스타일)", "ppt-reactant-mpeg")
+                        ],
+                        value="ppt-to-mpeg",
+                        label="변환 모드",
+                        info="기본: 슬라이드 순차 재생 | 리액턴트: TTS 싱크 텍스트 애니메이션 + 이미지"
+                    )
+
                     # 슬라이드 개수 표시 (숨김)
                     slide_count_state = gr.State(value=0)
 
@@ -1146,11 +1216,12 @@ class GradioUI:
 
             # 버튼 클릭 이벤트
             convert_btn.click(
-                fn=self.convert_ppt_to_video,
+                fn=self.convert_ppt_to_video_router,
                 inputs=[
                     pptx_input,
                     output_name,
                     custom_request,
+                    conversion_mode,
                     voice_choice,
                     resolution_choice,
                     total_duration,
@@ -1210,7 +1281,7 @@ def main():
     print("🚀 PPT to Video Converter - Gradio UI (상세 버전)")
     print("=" * 60)
     print()
-    print("브라우저에서 http://localhost:7860 으로 접속하세요")
+    print("브라우저에서 http://localhost:7861 으로 접속하세요")
     print("종료하려면 Ctrl+C를 누르세요")
     print()
 
@@ -1220,7 +1291,7 @@ def main():
 
     demo.launch(
         server_name="0.0.0.0",
-        server_port=7860,
+        server_port=7861,
         share=False,
         show_error=True,
         quiet=False

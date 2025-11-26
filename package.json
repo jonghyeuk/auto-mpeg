@@ -1,0 +1,20 @@
+{
+  "name": "auto-mpeg",
+  "version": "1.0.0",
+  "description": "PPT 파일을 AI 음성 설명이 포함된 교육 영상으로 자동 변환하는 파이프라인",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "http://local_proxy@127.0.0.1:55275/git/jonghyeuk/auto-mpeg"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "puppeteer": "^19.0.0",
+    "puppeteer-screen-recorder": "^3.0.6"
+  }
+}
