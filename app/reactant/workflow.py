@@ -174,7 +174,7 @@ class ReactantWorkflow:
             )):
                 script_text = script_item['script']
                 audio_duration = audio_item['duration']
-                audio_path = audio_item['audio_path']
+                audio_path = audio_item['audio']  # TTS 모듈은 'audio' 키 사용
 
                 # 단어 분리 (공백 기준)
                 words = script_text.split()
