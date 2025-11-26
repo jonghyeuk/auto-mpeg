@@ -32,11 +32,16 @@ def record_html_to_video(html_path: Path, output_video: Path, duration: float = 
     try:
         # Node.js로 Puppeteer 스크립트 실행
         print("  🌐 브라우저 시작 중...")
+
+        # 프로젝트 루트 디렉토리에서 실행 (node_modules 찾기 위해)
+        project_root = Path(__file__).parent.parent.parent
+
         result = subprocess.run(
             ['node', temp_script_path],
             capture_output=True,
             text=True,
-            timeout=duration + 60  # 녹화 시간 + 여유 시간
+            timeout=duration + 60,  # 녹화 시간 + 여유 시간
+            cwd=str(project_root)  # 프로젝트 루트에서 실행
         )
 
         if result.returncode != 0:
