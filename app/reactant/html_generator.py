@@ -37,11 +37,83 @@ def generate_html_with_animations(slides_with_timing: List[Dict], output_html: P
         body {{
             width: 1920px;
             height: 1080px;
-            background: #000;
+            background: #0a0a0a;
             color: #fff;
             font-family: 'Noto Sans KR', 'Malgun Gothic', sans-serif;
             overflow: hidden;
             position: relative;
+        }}
+
+        /* 시작 화면 (유튜브 스타일) */
+        .start-screen {{
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+            transition: opacity 0.5s ease;
+        }}
+
+        .start-screen.hidden {{
+            opacity: 0;
+            pointer-events: none;
+        }}
+
+        .play-button {{
+            width: 120px;
+            height: 120px;
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 50%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.4);
+        }}
+
+        .play-button:hover {{
+            transform: scale(1.1);
+            box-shadow: 0 15px 50px rgba(0, 255, 136, 0.4);
+        }}
+
+        .play-button::after {{
+            content: '';
+            width: 0;
+            height: 0;
+            border-top: 25px solid transparent;
+            border-bottom: 25px solid transparent;
+            border-left: 40px solid #1a1a2e;
+            margin-left: 8px;
+        }}
+
+        .start-title {{
+            font-size: 42px;
+            font-weight: 700;
+            margin-bottom: 20px;
+            color: #fff;
+            text-shadow: 2px 2px 10px rgba(0,0,0,0.5);
+        }}
+
+        .start-subtitle {{
+            font-size: 24px;
+            color: rgba(255,255,255,0.7);
+            margin-top: 30px;
+        }}
+
+        .duration-badge {{
+            margin-top: 15px;
+            padding: 8px 20px;
+            background: rgba(0, 255, 136, 0.2);
+            border-radius: 20px;
+            font-size: 18px;
+            color: #00ff88;
         }}
 
         .slide-container {{
@@ -106,17 +178,81 @@ def generate_html_with_animations(slides_with_timing: List[Dict], output_html: P
             box-shadow: 0 -2px 10px rgba(0, 255, 136, 0.5);
         }}
 
+        /* 컨트롤 바 */
+        .control-bar {{
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            gap: 15px;
+            padding: 10px 20px;
+            background: rgba(0,0,0,0.7);
+            border-radius: 30px;
+            opacity: 0;
+            transition: opacity 0.3s;
+            z-index: 100;
+        }}
+
+        body:hover .control-bar {{
+            opacity: 1;
+        }}
+
+        .control-btn {{
+            width: 40px;
+            height: 40px;
+            background: rgba(255,255,255,0.2);
+            border: none;
+            border-radius: 50%;
+            color: #fff;
+            font-size: 18px;
+            cursor: pointer;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            transition: all 0.2s;
+        }}
+
+        .control-btn:hover {{
+            background: rgba(0, 255, 136, 0.4);
+        }}
+
+        .time-display {{
+            color: #fff;
+            font-size: 14px;
+            display: flex;
+            align-items: center;
+            padding: 0 10px;
+        }}
+
         audio {{
             display: none;
         }}
     </style>
 </head>
 <body>
+    <!-- 시작 화면 (유튜브 스타일) -->
+    <div class="start-screen" id="startScreen">
+        <div class="start-title">PPT 강의 영상</div>
+        <div class="play-button" id="playButton"></div>
+        <div class="start-subtitle">클릭하여 재생</div>
+        <div class="duration-badge">총 {int(total_duration // 60)}분 {int(total_duration % 60)}초</div>
+    </div>
+
     <div id="app">
         {generate_slides_html(slides_with_timing)}
     </div>
 
     <div class="progress-bar" id="progressBar"></div>
+
+    <!-- 컨트롤 바 -->
+    <div class="control-bar" id="controlBar">
+        <button class="control-btn" id="pauseBtn">⏸</button>
+        <button class="control-btn" id="restartBtn">↻</button>
+        <div class="time-display">
+            <span id="currentTimeDisplay">0:00</span> / <span id="totalTimeDisplay">{int(total_duration // 60)}:{int(total_duration % 60):02d}</span>
+        </div>
+    </div>
 
     <!-- 오디오 플레이어 (숨김) -->
     {generate_audio_html(audio_files)}
@@ -129,6 +265,9 @@ def generate_html_with_animations(slides_with_timing: List[Dict], output_html: P
         let currentTime = 0;
         let currentSlideIndex = 0;
         let audioElements = [];
+        let isPlaying = false;
+        let isPaused = false;
+        let animationId = null;
 
         // 오디오 요소 로드
         function loadAudioElements() {{
@@ -136,6 +275,17 @@ def generate_html_with_animations(slides_with_timing: List[Dict], output_html: P
                 const audio = document.getElementById(`audio-${{index}}`);
                 if (audio) {{
                     audioElements.push(audio);
+                    // 오디오 종료 시 다음 슬라이드로
+                    audio.addEventListener('ended', () => {{
+                        if (index < slidesData.length - 1) {{
+                            currentSlideIndex = index + 1;
+                            activateSlide(currentSlideIndex);
+                            if (audioElements[currentSlideIndex] && !isPaused) {{
+                                audioElements[currentSlideIndex].currentTime = 0;
+                                audioElements[currentSlideIndex].play();
+                            }}
+                        }}
+                    }});
                 }}
             }});
         }}
@@ -198,7 +348,7 @@ def generate_html_with_animations(slides_with_timing: List[Dict], output_html: P
                         activateSlide(currentSlideIndex);
 
                         // 해당 슬라이드 오디오 재생
-                        if (audioElements[i]) {{
+                        if (audioElements[i] && !isPaused) {{
                             audioElements[i].currentTime = 0;
                             audioElements[i].play();
                         }}
@@ -208,8 +358,20 @@ def generate_html_with_animations(slides_with_timing: List[Dict], output_html: P
             }}
         }}
 
+        // 시간 포맷팅
+        function formatTime(seconds) {{
+            const mins = Math.floor(seconds / 60);
+            const secs = Math.floor(seconds % 60);
+            return `${{mins}}:${{secs.toString().padStart(2, '0')}}`;
+        }}
+
         // 메인 타임라인 업데이트
         function updateTimeline() {{
+            if (isPaused) {{
+                animationId = requestAnimationFrame(updateTimeline);
+                return;
+            }}
+
             // 오디오 기준 시간 사용 (더 정확)
             if (audioElements[currentSlideIndex]) {{
                 const localTime = audioElements[currentSlideIndex].currentTime;
@@ -222,6 +384,9 @@ def generate_html_with_animations(slides_with_timing: List[Dict], output_html: P
             const progress = Math.min((currentTime / totalDuration) * 100, 100);
             document.getElementById('progressBar').style.width = progress + '%';
 
+            // 시간 표시 업데이트
+            document.getElementById('currentTimeDisplay').textContent = formatTime(currentTime);
+
             // 슬라이드 전환 체크
             checkSlideTransition(currentTime);
 
@@ -231,13 +396,15 @@ def generate_html_with_animations(slides_with_timing: List[Dict], output_html: P
 
             // 종료 조건
             if (currentTime < totalDuration) {{
-                requestAnimationFrame(updateTimeline);
+                animationId = requestAnimationFrame(updateTimeline);
             }}
         }}
 
-        // 초기 실행
-        window.addEventListener('DOMContentLoaded', () => {{
-            loadAudioElements();
+        // 재생 시작
+        function startPlayback() {{
+            document.getElementById('startScreen').classList.add('hidden');
+            isPlaying = true;
+            isPaused = false;
             activateSlide(0);
 
             // 첫 오디오 재생
@@ -245,7 +412,80 @@ def generate_html_with_animations(slides_with_timing: List[Dict], output_html: P
                 audioElements[0].play();
             }}
 
-            requestAnimationFrame(updateTimeline);
+            animationId = requestAnimationFrame(updateTimeline);
+        }}
+
+        // 일시정지/재개
+        function togglePause() {{
+            isPaused = !isPaused;
+            const pauseBtn = document.getElementById('pauseBtn');
+
+            if (isPaused) {{
+                pauseBtn.textContent = '▶';
+                // 모든 오디오 일시정지
+                audioElements.forEach(audio => audio.pause());
+            }} else {{
+                pauseBtn.textContent = '⏸';
+                // 현재 오디오 재개
+                if (audioElements[currentSlideIndex]) {{
+                    audioElements[currentSlideIndex].play();
+                }}
+            }}
+        }}
+
+        // 재시작
+        function restart() {{
+            // 모든 오디오 정지
+            audioElements.forEach(audio => {{
+                audio.pause();
+                audio.currentTime = 0;
+            }});
+
+            // 이미지 숨기기
+            document.querySelectorAll('.slide-image').forEach(img => {{
+                img.classList.remove('visible');
+            }});
+
+            currentTime = 0;
+            currentSlideIndex = 0;
+            isPaused = false;
+            document.getElementById('pauseBtn').textContent = '⏸';
+            activateSlide(0);
+
+            // 첫 오디오 재생
+            if (audioElements[0]) {{
+                audioElements[0].play();
+            }}
+        }}
+
+        // 초기 실행
+        window.addEventListener('DOMContentLoaded', () => {{
+            loadAudioElements();
+
+            // 시작 버튼 클릭
+            document.getElementById('playButton').addEventListener('click', startPlayback);
+            document.getElementById('startScreen').addEventListener('click', (e) => {{
+                if (e.target === e.currentTarget || e.target.classList.contains('start-title') ||
+                    e.target.classList.contains('start-subtitle') || e.target.classList.contains('duration-badge')) {{
+                    startPlayback();
+                }}
+            }});
+
+            // 컨트롤 버튼
+            document.getElementById('pauseBtn').addEventListener('click', togglePause);
+            document.getElementById('restartBtn').addEventListener('click', restart);
+
+            // 키보드 단축키
+            document.addEventListener('keydown', (e) => {{
+                if (e.code === 'Space') {{
+                    e.preventDefault();
+                    if (!isPlaying) {{
+                        startPlayback();
+                    }} else {{
+                        togglePause();
+                    }}
+                }}
+            }});
         }});
     </script>
 </body>
