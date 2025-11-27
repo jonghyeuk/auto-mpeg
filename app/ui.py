@@ -444,25 +444,30 @@ class GradioUI:
             if keywords:
                 log_output = self.log("🔑 핵심 키워드 (텍스트 애니메이션):", log_output)
 
-                # 타이밍 자동 계산: 대본에서 키워드가 실제로 나오는 위치 기반
-                estimated_duration = len(script) / 3.5  # 예상 TTS 길이
+                # 타이밍 자동 계산: 대본에서 키워드가 실제로 나오는 위치 기반 (단어 기준)
+                total_words = len(script.split())
+                estimated_duration = total_words * 0.4  # 단어당 약 0.4초 (평균 한국어 TTS)
                 for kw in keywords:
                     # 대본에서 키워드 위치 찾기
                     keyword_text = kw['text'].strip()
                     keyword_pos = script.find(keyword_text)
 
                     if keyword_pos >= 0:
-                        # 키워드 위치 기반 타이밍 계산
-                        char_ratio = keyword_pos / max(len(script), 1)
-                        calculated_timing = char_ratio * estimated_duration
+                        # 단어 기반 타이밍 계산 (더 정확함)
+                        text_before_keyword = script[:keyword_pos]
+                        words_before = len(text_before_keyword.split())
+
+                        # 단어 비율로 타이밍 계산
+                        word_ratio = words_before / max(total_words, 1)
+                        calculated_timing = word_ratio * estimated_duration
 
                         # LLM이 제공한 타이밍과 비교
                         original_timing = kw['timing']
                         diff = abs(calculated_timing - original_timing)
 
-                        # 차이가 3초 이상이면 자동 보정
-                        if diff > 3.0:
-                            log_output = self.log(f"  - {kw['text']}: {original_timing:.1f}초 → {calculated_timing:.1f}초 (자동 보정)", log_output)
+                        # 차이가 2초 이상이면 자동 보정
+                        if diff > 2.0:
+                            log_output = self.log(f"  - {kw['text']}: {original_timing:.1f}초 → {calculated_timing:.1f}초 (단어 {words_before}/{total_words})", log_output)
                             kw['timing'] = calculated_timing
                         else:
                             log_output = self.log(f"  - {kw['text']} ({kw['timing']:.1f}초)", log_output)
@@ -903,16 +908,26 @@ class GradioUI:
                         keyword_text = kw_overlay['keyword']
                         old_timing = kw_overlay['timing']
 
-                        # 대본에서 키워드 위치 찾기
+                        # 대본에서 키워드 위치 찾기 (단어 기반으로 계산)
                         keyword_pos = script_text.find(keyword_text)
                         if keyword_pos >= 0:
-                            # 실제 TTS 길이 기준으로 타이밍 재계산
-                            char_ratio = keyword_pos / max(len(script_text), 1)
-                            new_timing = char_ratio * actual_duration
+                            # 단어 기반 타이밍 계산 (더 정확함)
+                            # 키워드 앞에 있는 단어 수를 세기
+                            text_before_keyword = script_text[:keyword_pos]
+                            words_before = len(text_before_keyword.split())
+                            total_words = len(script_text.split())
+
+                            # 단어 비율로 타이밍 계산
+                            word_ratio = words_before / max(total_words, 1)
+                            new_timing = word_ratio * actual_duration
+
+                            # 약간의 보정: 문장 시작 부분은 조금 앞으로
+                            if word_ratio < 0.3:
+                                new_timing = max(0.5, new_timing * 0.9)
 
                             # 타이밍 업데이트
                             kw_overlay['timing'] = new_timing
-                            log_output = self.log(f"    - '{keyword_text}': {old_timing:.1f}초 → {new_timing:.1f}초", log_output)
+                            log_output = self.log(f"    - '{keyword_text}': {old_timing:.1f}초 → {new_timing:.1f}초 (단어 {words_before}/{total_words})", log_output)
 
             if timing_adjusted:
                 # 재조정된 타이밍으로 scripts.json 업데이트
