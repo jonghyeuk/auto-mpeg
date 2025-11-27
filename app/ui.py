@@ -596,22 +596,23 @@ class GradioUI:
                 progress=progress
             ):
                 if reactant_output_format == "html":
-                    # HTML 모드: ZIP 다운로드 + 미리보기
-                    html_preview = None
-                    if html_path:
-                        # iframe 미리보기 생성
-                        html_preview = f'''
-                        <div style="width:100%; height:600px; border:2px solid #333; border-radius:10px; overflow:hidden;">
-                            <iframe src="file://{html_path}"
-                                    style="width:100%; height:100%; border:none; transform:scale(0.5); transform-origin:top left; width:200%; height:200%;">
-                            </iframe>
-                        </div>
-                        <p style="text-align:center; color:#666; margin-top:10px;">
-                            ⚠️ 브라우저 보안 정책으로 미리보기가 제한될 수 있습니다.<br>
-                            ZIP을 다운로드하여 index.html을 직접 열어주세요.
+                    # HTML 모드: ZIP 다운로드 + 안내
+                    html_info = f'''
+                    <div style="text-align:center; padding:40px; background:linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); color:#fff; border-radius:15px; box-shadow: 0 10px 40px rgba(0,0,0,0.3);">
+                        <div style="font-size:60px; margin-bottom:20px;">🎬</div>
+                        <h3 style="margin-bottom:15px; color:#00c8ff;">HTML 플레이어 준비 완료!</h3>
+                        <p style="color:#aaa; margin-bottom:20px;">
+                            아래 ZIP 파일을 다운로드하여<br>
+                            압축 해제 후 <strong style="color:#00ff88;">index.html</strong>을 브라우저로 열어주세요.
                         </p>
-                        '''
-                    yield log_output, None, output_path, html_preview
+                        <div style="background:rgba(0,200,255,0.1); padding:15px; border-radius:10px; border:1px solid rgba(0,200,255,0.3);">
+                            <p style="margin:0; font-size:14px; color:#888;">
+                                📁 포함된 파일: index.html, audio/, elements/
+                            </p>
+                        </div>
+                    </div>
+                    '''
+                    yield log_output, None, output_path, html_info
                 else:
                     # MP4 모드: 기존 비디오 출력
                     yield log_output, output_path, None, None
@@ -1240,20 +1241,20 @@ class GradioUI:
 
             # 출력 영역
             with gr.Row():
-                with gr.Column():
+                with gr.Column(visible=True) as video_output_col:
                     video_output = gr.Video(
                         label="완성된 영상 (MP4)",
                         autoplay=False
                     )
 
                 with gr.Column(visible=False) as html_output_col:
-                    gr.Markdown("### 🎬 HTML 플레이어 미리보기")
+                    gr.Markdown("### 🎬 HTML 플레이어")
                     html_preview = gr.HTML(
-                        label="미리보기",
-                        value="<div style='text-align:center; padding:50px; background:#1a1a2e; color:#fff; border-radius:10px;'>변환 완료 후 여기에 미리보기가 표시됩니다</div>"
+                        label="안내",
+                        value="<div style='text-align:center; padding:50px; background:#1a1a2e; color:#fff; border-radius:10px;'>변환 완료 후 ZIP을 다운로드하세요</div>"
                     )
                     zip_download = gr.File(
-                        label="ZIP 다운로드",
+                        label="📦 ZIP 다운로드 (HTML + 오디오 + 이미지)",
                         visible=True
                     )
 
@@ -1281,6 +1282,26 @@ class GradioUI:
                 fn=update_reactant_options,
                 inputs=[conversion_mode],
                 outputs=[reactant_output_format]
+            )
+
+            # 출력 형식 변경 시 출력 컬럼 전환
+            def update_output_columns(mode, output_format):
+                """출력 형식에 따라 비디오/HTML 컬럼 전환"""
+                if mode == "ppt-reactant-mpeg" and output_format == "html":
+                    return gr.update(visible=False), gr.update(visible=True)
+                else:
+                    return gr.update(visible=True), gr.update(visible=False)
+
+            conversion_mode.change(
+                fn=update_output_columns,
+                inputs=[conversion_mode, reactant_output_format],
+                outputs=[video_output_col, html_output_col]
+            )
+
+            reactant_output_format.change(
+                fn=update_output_columns,
+                inputs=[conversion_mode, reactant_output_format],
+                outputs=[video_output_col, html_output_col]
             )
 
             # 버튼 클릭 이벤트
