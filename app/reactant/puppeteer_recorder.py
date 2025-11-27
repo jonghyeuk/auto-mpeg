@@ -37,19 +37,17 @@ def record_html_to_video(html_path: Path, output_video: Path, duration: float = 
 
         result = subprocess.run(
             ['node', str(temp_script_path)],
-            capture_output=True,
+            capture_output=False,  # 실시간 출력 보기
             text=True,
             encoding='utf-8',  # Windows cp949 인코딩 문제 방지
             errors='replace',  # 디코딩 에러 시 대체 문자 사용
-            timeout=duration + 60,  # 녹화 시간 + 여유 시간
+            timeout=duration + 180,  # 녹화 시간 + FFmpeg 변환 여유 시간
             cwd=str(project_root)  # 프로젝트 루트에서 실행
         )
 
         if result.returncode != 0:
-            print(f"  ❌ 녹화 실패:")
-            print(f"  stdout: {result.stdout}")
-            print(f"  stderr: {result.stderr}")
-            raise RuntimeError(f"Puppeteer 녹화 실패: {result.stderr}")
+            print(f"  ❌ 녹화 실패 (종료 코드: {result.returncode})")
+            raise RuntimeError(f"Puppeteer 녹화 실패 (종료 코드: {result.returncode})")
 
         print(f"  ✅ 녹화 완료!")
         print(f"  📁 저장됨: {output_video}")
@@ -68,6 +66,11 @@ def create_puppeteer_script(html_path: Path, output_video: Path, duration: float
     """
     # WebM으로 먼저 녹화 후, FFmpeg로 MP4 변환
     temp_webm = output_video.parent / f"{output_video.stem}_temp.webm"
+
+    # Windows 경로를 슬래시로 변환 (file:// URL 및 JavaScript 문자열 호환)
+    html_url = html_path.absolute().as_posix()
+    temp_webm_path = temp_webm.as_posix()
+    output_video_path = output_video.as_posix()
 
     script = f"""
 const puppeteer = require('puppeteer');
@@ -95,7 +98,7 @@ const {{ execSync }} = require('child_process');
     await page.setViewport({{ width: 1920, height: 1080 }});
 
     console.log('📄 HTML 로드 중...');
-    await page.goto('file://{html_path.absolute()}', {{
+    await page.goto('file://{html_url}', {{
         waitUntil: 'networkidle0'
     }});
 
@@ -112,7 +115,7 @@ const {{ execSync }} = require('child_process');
         aspectRatio: '16:9'
     }});
 
-    await recorder.start('{str(temp_webm)}');
+    await recorder.start('{temp_webm_path}');
 
     // 지정된 시간만큼 대기
     await page.waitForTimeout({int(duration * 1000)});
@@ -127,12 +130,12 @@ const {{ execSync }} = require('child_process');
     // FFmpeg로 WebM을 MP4로 변환
     try {{
         execSync(
-            `ffmpeg -y -i "{str(temp_webm)}" -c:v libx264 -preset medium -crf 23 -pix_fmt yuv420p "{str(output_video)}"`,
+            `ffmpeg -y -i "{temp_webm_path}" -c:v libx264 -preset medium -crf 23 -pix_fmt yuv420p "{output_video_path}"`,
             {{ stdio: 'inherit' }}
         );
 
         // 임시 WebM 파일 삭제
-        fs.unlinkSync('{str(temp_webm)}');
+        fs.unlinkSync('{temp_webm_path}');
 
         console.log('✅ 변환 완료!');
     }} catch (err) {{
