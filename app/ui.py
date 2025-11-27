@@ -557,6 +557,7 @@ class GradioUI:
         output_name,
         custom_request,
         conversion_mode,
+        reactant_output_format,
         voice_choice,
         resolution_choice,
         total_duration_minutes,
@@ -575,23 +576,48 @@ class GradioUI:
 
         Args:
             conversion_mode: "ppt-to-mpeg" 또는 "ppt-reactant-mpeg"
+            reactant_output_format: "html" 또는 "mp4" (리액턴트 모드에서만 사용)
+
+        Yields:
+            (log_output, video_path, zip_path, html_preview)
         """
         if conversion_mode == "ppt-reactant-mpeg":
             # 새 모드: Reactant 워크플로우
             from app.reactant.workflow import ReactantWorkflow
 
             workflow = ReactantWorkflow()
-            yield from workflow.convert_ppt_to_reactant_video(
+            for log_output, output_path, html_path in workflow.convert_ppt_to_reactant_video(
                 pptx_file=pptx_file,
                 output_name=output_name,
                 custom_request=custom_request,
                 voice_choice=voice_choice,
                 total_duration_minutes=float(total_duration_minutes),
+                output_format=reactant_output_format,
                 progress=progress
-            )
+            ):
+                if reactant_output_format == "html":
+                    # HTML 모드: ZIP 다운로드 + 미리보기
+                    html_preview = None
+                    if html_path:
+                        # iframe 미리보기 생성
+                        html_preview = f'''
+                        <div style="width:100%; height:600px; border:2px solid #333; border-radius:10px; overflow:hidden;">
+                            <iframe src="file://{html_path}"
+                                    style="width:100%; height:100%; border:none; transform:scale(0.5); transform-origin:top left; width:200%; height:200%;">
+                            </iframe>
+                        </div>
+                        <p style="text-align:center; color:#666; margin-top:10px;">
+                            ⚠️ 브라우저 보안 정책으로 미리보기가 제한될 수 있습니다.<br>
+                            ZIP을 다운로드하여 index.html을 직접 열어주세요.
+                        </p>
+                        '''
+                    yield log_output, None, output_path, html_preview
+                else:
+                    # MP4 모드: 기존 비디오 출력
+                    yield log_output, output_path, None, None
         else:
             # 기존 모드: 기본 워크플로우
-            yield from self.convert_ppt_to_video(
+            for result in self.convert_ppt_to_video(
                 pptx_file=pptx_file,
                 output_name=output_name,
                 custom_request=custom_request,
@@ -607,7 +633,12 @@ class GradioUI:
                 video_quality=video_quality,
                 encoding_speed=encoding_speed,
                 progress=progress
-            )
+            ):
+                # 기존 모드는 (log, video) 반환 -> (log, video, None, None)으로 확장
+                if isinstance(result, tuple) and len(result) == 2:
+                    yield result[0], result[1], None, None
+                else:
+                    yield result, None, None, None
 
     def convert_ppt_to_video(
         self,
@@ -1090,6 +1121,18 @@ class GradioUI:
                         info="기본: 슬라이드 순차 재생 | 리액턴트: TTS 싱크 텍스트 애니메이션 + 이미지"
                     )
 
+                    # 리액턴트 모드 출력 형식 (리액턴트 모드에서만 표시)
+                    reactant_output_format = gr.Radio(
+                        choices=[
+                            ("HTML 플레이어 (즉시 미리보기 + ZIP 다운로드)", "html"),
+                            ("MP4 변환 (Puppeteer 녹화)", "mp4")
+                        ],
+                        value="html",
+                        label="리액턴트 출력 형식",
+                        info="HTML: 빠른 생성 | MP4: 유튜브 업로드용",
+                        visible=False
+                    )
+
                     # 슬라이드 개수 표시 (숨김)
                     slide_count_state = gr.State(value=0)
 
@@ -1195,10 +1238,24 @@ class GradioUI:
                         show_copy_button=True
                     )
 
-            video_output = gr.Video(
-                label="완성된 영상",
-                autoplay=False
-            )
+            # 출력 영역
+            with gr.Row():
+                with gr.Column():
+                    video_output = gr.Video(
+                        label="완성된 영상 (MP4)",
+                        autoplay=False
+                    )
+
+                with gr.Column(visible=False) as html_output_col:
+                    gr.Markdown("### 🎬 HTML 플레이어 미리보기")
+                    html_preview = gr.HTML(
+                        label="미리보기",
+                        value="<div style='text-align:center; padding:50px; background:#1a1a2e; color:#fff; border-radius:10px;'>변환 완료 후 여기에 미리보기가 표시됩니다</div>"
+                    )
+                    zip_download = gr.File(
+                        label="ZIP 다운로드",
+                        visible=True
+                    )
 
             # PPT 업로드 시 슬라이드 개수 분석 및 영상 길이 옵션 업데이트
             def update_duration_options(pptx_file):
@@ -1214,6 +1271,18 @@ class GradioUI:
                 outputs=[total_duration, slide_count_state]
             )
 
+            # 변환 모드 변경 시 리액턴트 출력 형식 표시/숨김
+            def update_reactant_options(mode):
+                """변환 모드에 따라 리액턴트 옵션 표시"""
+                is_reactant = (mode == "ppt-reactant-mpeg")
+                return gr.update(visible=is_reactant)
+
+            conversion_mode.change(
+                fn=update_reactant_options,
+                inputs=[conversion_mode],
+                outputs=[reactant_output_format]
+            )
+
             # 버튼 클릭 이벤트
             convert_btn.click(
                 fn=self.convert_ppt_to_video_router,
@@ -1222,6 +1291,7 @@ class GradioUI:
                     output_name,
                     custom_request,
                     conversion_mode,
+                    reactant_output_format,
                     voice_choice,
                     resolution_choice,
                     total_duration,
@@ -1234,7 +1304,7 @@ class GradioUI:
                     video_quality,
                     encoding_speed
                 ],
-                outputs=[progress_output, video_output]
+                outputs=[progress_output, video_output, zip_download, html_preview]
             )
 
             gr.Markdown(

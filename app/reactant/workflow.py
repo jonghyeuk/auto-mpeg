@@ -1,10 +1,14 @@
 """
 PPT Reactant MPEG 워크플로우
 PPT → 요소 추출 → React HTML 생성 → Puppeteer 녹화 → MP4
+또는
+PPT → 요소 추출 → React HTML 생성 → ZIP 패키지 (HTML 플레이어 모드)
 """
 from pathlib import Path
 from typing import Generator
 import json
+import zipfile
+import shutil
 import gradio as gr
 
 from app import config
@@ -31,10 +35,11 @@ class ReactantWorkflow:
         custom_request: str,
         voice_choice: str,
         total_duration_minutes: float,
+        output_format: str = "mp4",
         progress=gr.Progress()
     ) -> Generator:
         """
-        PPT를 Reactant 모드로 변환 (인터랙티브 웹 스타일 → MP4)
+        PPT를 Reactant 모드로 변환
 
         Args:
             pptx_file: PPT 파일
@@ -42,10 +47,11 @@ class ReactantWorkflow:
             custom_request: 사용자 요청사항
             voice_choice: TTS 음성
             total_duration_minutes: 목표 영상 길이 (분)
+            output_format: 출력 형식 ("mp4" 또는 "html")
             progress: Gradio progress tracker
 
         Yields:
-            (log_output, video_path)
+            (log_output, output_path, html_preview_path)
         """
         log_output = ""
 
@@ -56,7 +62,7 @@ class ReactantWorkflow:
             log_output = self.log("🎨 STEP 1: PPT 요소 추출 (Reactant 모드)", log_output)
             log_output = self.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", log_output)
             log_output = self.log("", log_output)
-            yield log_output, None
+            yield log_output, None, None
 
             # PPT 파일 경로
             pptx_path = Path(pptx_file.name)
@@ -67,13 +73,13 @@ class ReactantWorkflow:
 
             log_output = self.log(f"📄 PPT 파일: {pptx_path.name}", log_output)
             log_output = self.log("🔍 텍스트, 이미지, 도형 추출 중...", log_output)
-            yield log_output, None
+            yield log_output, None, None
 
             elements = extract_ppt_elements(pptx_path, elements_json, elements_dir)
 
             log_output = self.log(f"✅ 요소 추출 완료: {len(elements['slides'])}개 슬라이드", log_output)
             log_output = self.log("", log_output)
-            yield log_output, None
+            yield log_output, None, None
 
             # ===== STEP 2: 대본 생성 및 TTS =====
             progress(0.2, desc="AI 대본 생성 중...")
@@ -81,7 +87,7 @@ class ReactantWorkflow:
             log_output = self.log("🤖 STEP 2: AI 대본 생성", log_output)
             log_output = self.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", log_output)
             log_output = self.log("", log_output)
-            yield log_output, None
+            yield log_output, None, None
 
             # 슬라이드 텍스트로부터 대본 생성
             from app.modules.script_generator import ScriptGenerator
@@ -94,7 +100,7 @@ class ReactantWorkflow:
 
             for i, slide_element in enumerate(elements['slides'], start=1):
                 log_output = self.log(f"  - 슬라이드 {i}/{total_slides}: 대본 생성 중...", log_output)
-                yield log_output, None
+                yield log_output, None, None
 
                 # 슬라이드 텍스트 결합
                 slide_texts = [text_info["text"] for text_info in slide_element.get("texts", [])]
@@ -122,7 +128,7 @@ class ReactantWorkflow:
                 })
 
                 log_output = self.log(f"    ✓ {len(script_text)}자 생성", log_output)
-                yield log_output, None
+                yield log_output, None, None
 
             # 대본 JSON 저장
             scripts_json = self.reactant_dir / "scripts.json"
@@ -131,7 +137,7 @@ class ReactantWorkflow:
 
             log_output = self.log(f"✅ 대본 생성 완료: {len(scripts_data)}개", log_output)
             log_output = self.log("", log_output)
-            yield log_output, None
+            yield log_output, None, None
 
             # ===== STEP 3: TTS 생성 =====
             progress(0.4, desc="TTS 음성 생성 중...")
@@ -139,7 +145,7 @@ class ReactantWorkflow:
             log_output = self.log(f"🔊 STEP 3: TTS 음성 생성 (음성: {voice_choice})", log_output)
             log_output = self.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", log_output)
             log_output = self.log("", log_output)
-            yield log_output, None
+            yield log_output, None, None
 
             from app.modules.tts_client import TTSClient
 
@@ -158,12 +164,12 @@ class ReactantWorkflow:
             total_audio_duration = sum(item['duration'] for item in audio_meta)
             log_output = self.log(f"✅ TTS 생성 완료: {len(audio_meta)}개 오디오 ({total_audio_duration:.1f}초)", log_output)
             log_output = self.log("", log_output)
-            yield log_output, None
+            yield log_output, None, None
 
             # ===== STEP 4: 단어별 타이밍 계산 =====
             progress(0.5, desc="단어별 타이밍 계산 중...")
             log_output = self.log("⏱️  단어별 타이밍 계산 중...", log_output)
-            yield log_output, None
+            yield log_output, None, None
 
             # 각 슬라이드의 대본과 TTS 길이를 매칭하여 단어별 타이밍 계산
             slides_with_timing = []
@@ -228,7 +234,7 @@ class ReactantWorkflow:
 
             log_output = self.log(f"✅ 타이밍 계산 완료: 총 {cumulative_time:.1f}초", log_output)
             log_output = self.log("", log_output)
-            yield log_output, None
+            yield log_output, None, None
 
             # ===== STEP 5: HTML 생성 =====
             progress(0.6, desc="인터랙티브 HTML 생성 중...")
@@ -236,46 +242,99 @@ class ReactantWorkflow:
             log_output = self.log("🌐 STEP 5: HTML + 애니메이션 생성", log_output)
             log_output = self.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", log_output)
             log_output = self.log("", log_output)
-            yield log_output, None
+            yield log_output, None, None
 
             html_path = self.reactant_dir / "index.html"
 
             log_output = self.log("🎬 TTS 싱크 텍스트 애니메이션 생성 중...", log_output)
-            yield log_output, None
+            yield log_output, None, None
 
             # 실제 타이밍 데이터로 HTML 생성
             generate_html_with_animations(slides_with_timing, html_path, cumulative_time)
 
             log_output = self.log(f"✅ HTML 생성 완료: {html_path}", log_output)
             log_output = self.log("", log_output)
-            yield log_output, None
+            yield log_output, None, None
 
-            # ===== STEP 6: Puppeteer 녹화 =====
-            progress(0.8, desc="웹 페이지 녹화 중...")
-            log_output = self.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", log_output)
-            log_output = self.log("🎥 STEP 6: 웹 페이지 → MP4 녹화", log_output)
-            log_output = self.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", log_output)
-            log_output = self.log("", log_output)
-            yield log_output, None
+            # ===== STEP 6: 출력 형식에 따라 분기 =====
+            if output_format == "html":
+                # HTML 플레이어 모드: ZIP 패키징
+                progress(0.8, desc="HTML 패키지 생성 중...")
+                log_output = self.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", log_output)
+                log_output = self.log("📦 STEP 6: HTML 플레이어 패키징", log_output)
+                log_output = self.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", log_output)
+                log_output = self.log("", log_output)
+                yield log_output, None, None, str(html_path)
 
-            output_video = config.OUTPUT_DIR / f"{output_name}.mp4"
+                # ZIP 파일 생성
+                zip_path = config.OUTPUT_DIR / f"{output_name}_player.zip"
+                log_output = self.log("🗜️  ZIP 패키지 생성 중...", log_output)
+                yield log_output, None, None, str(html_path)
 
-            log_output = self.log("📹 Puppeteer로 브라우저 녹화 시작...", log_output)
-            log_output = self.log(f"  - 녹화 시간: {cumulative_time:.1f}초", log_output)
-            yield log_output, None
+                self._create_zip_package(html_path, zip_path)
 
-            record_html_to_video(html_path, output_video, duration=cumulative_time)
+                log_output = self.log(f"✅ HTML 플레이어 패키지 완료!", log_output)
+                log_output = self.log(f"  📁 ZIP: {zip_path}", log_output)
+                log_output = self.log(f"  🌐 미리보기: 아래 플레이어에서 확인", log_output)
+                log_output = self.log("", log_output)
+                log_output = self.log("💡 사용법:", log_output)
+                log_output = self.log("  1. ZIP 다운로드 후 압축 해제", log_output)
+                log_output = self.log("  2. index.html을 브라우저로 열기", log_output)
+                log_output = self.log("  3. 재생 버튼 클릭!", log_output)
+                log_output = self.log("", log_output)
 
-            log_output = self.log(f"✅ 영상 생성 완료: {output_video}", log_output)
-            log_output = self.log("", log_output)
+                progress(1.0, desc="완료!")
+                yield log_output, str(zip_path), str(html_path)
 
-            progress(1.0, desc="완료!")
-            yield log_output, str(output_video)
+            else:
+                # MP4 모드: Puppeteer 녹화
+                progress(0.8, desc="웹 페이지 녹화 중...")
+                log_output = self.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", log_output)
+                log_output = self.log("🎥 STEP 6: 웹 페이지 → MP4 녹화", log_output)
+                log_output = self.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", log_output)
+                log_output = self.log("", log_output)
+                log_output = self.log(f"⏱️  예상 소요 시간: {cumulative_time * 1.5 / 60:.1f}분", log_output)
+                yield log_output, None, None, None
+
+                output_video = config.OUTPUT_DIR / f"{output_name}.mp4"
+
+                log_output = self.log("📹 Puppeteer로 브라우저 녹화 시작...", log_output)
+                log_output = self.log(f"  - 녹화 시간: {cumulative_time:.1f}초", log_output)
+                yield log_output, None, None, None
+
+                record_html_to_video(html_path, output_video, duration=cumulative_time)
+
+                log_output = self.log(f"✅ 영상 생성 완료: {output_video}", log_output)
+                log_output = self.log("", log_output)
+
+                progress(1.0, desc="완료!")
+                yield log_output, str(output_video), None
 
         except Exception as e:
             log_output = self.log(f"❌ 오류 발생: {str(e)}", log_output)
-            yield log_output, None
+            yield log_output, None, None, None
             raise
+
+    def _create_zip_package(self, html_path: Path, zip_path: Path):
+        """HTML 플레이어를 ZIP으로 패키징"""
+        reactant_dir = html_path.parent
+
+        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            # index.html
+            zipf.write(html_path, "index.html")
+
+            # 오디오 폴더
+            audio_dir = reactant_dir / "audio"
+            if audio_dir.exists():
+                for audio_file in audio_dir.glob("*.mp3"):
+                    zipf.write(audio_file, f"audio/{audio_file.name}")
+
+            # 이미지/요소 폴더
+            elements_dir = reactant_dir / "elements"
+            if elements_dir.exists():
+                for elem_file in elements_dir.glob("*"):
+                    if elem_file.is_file():
+                        zipf.write(elem_file, f"elements/{elem_file.name}")
 
 
 def convert_ppt_to_reactant_video(
@@ -284,6 +343,7 @@ def convert_ppt_to_reactant_video(
     custom_request: str,
     voice_choice: str,
     total_duration_minutes: float,
+    output_format: str = "mp4",
     progress=gr.Progress()
 ):
     """외부에서 호출할 수 있는 함수"""
@@ -294,5 +354,6 @@ def convert_ppt_to_reactant_video(
         custom_request,
         voice_choice,
         total_duration_minutes,
+        output_format,
         progress
     )
