@@ -41,7 +41,7 @@ def record_html_to_video(html_path: Path, output_video: Path, duration: float = 
             text=True,
             encoding='utf-8',  # Windows cp949 인코딩 문제 방지
             errors='replace',  # 디코딩 에러 시 대체 문자 사용
-            timeout=duration + 60,  # 녹화 시간 + 여유 시간
+            timeout=duration * 1.5 + 180,  # 녹화 시간 * 1.5 + 인코딩/초기화 여유 시간
             cwd=str(project_root)  # 프로젝트 루트에서 실행
         )
 
