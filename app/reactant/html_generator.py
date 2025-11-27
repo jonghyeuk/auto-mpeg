@@ -592,11 +592,14 @@ def generate_html_with_animations(slides_with_timing: List[Dict], output_html: P
 
 
 def generate_audio_html(audio_files: List[str]) -> str:
-    """오디오 HTML 생성"""
+    """오디오 HTML 생성 (상대 경로로 변환)"""
     audio_html = []
 
     for i, audio_path in enumerate(audio_files):
-        audio_html.append(f'<audio id="audio-{i}" src="{audio_path}"></audio>')
+        # 절대 경로에서 파일명만 추출하여 상대 경로로 변환
+        filename = Path(audio_path).name
+        relative_path = f"audio/{filename}"
+        audio_html.append(f'<audio id="audio-{i}" src="{relative_path}" preload="auto"></audio>')
 
     return "\n    ".join(audio_html)
 
@@ -613,12 +616,22 @@ def prepare_slides_data_with_sentences(slides_with_timing: List[Dict]) -> List[D
             # 첫 번째 텍스트를 타이틀로 사용
             title = texts[0].get("text", "") if texts else ""
 
-        # 이미지 경로 추출
+        # 이미지 경로 추출 (상대 경로로 변환)
         images = []
         for img in slide.get("images", []):
             img_path = img.get("path", "")
             if img_path:
-                images.append(img_path)
+                # 절대 경로인 경우 상대 경로로 변환
+                img_path_obj = Path(img_path)
+                if img_path_obj.is_absolute():
+                    # elements/filename.png 형식으로 변환
+                    relative_path = f"elements/{img_path_obj.name}"
+                elif "elements" in img_path:
+                    # 이미 상대 경로이면 그대로 사용
+                    relative_path = img_path
+                else:
+                    relative_path = f"elements/{img_path_obj.name}"
+                images.append(relative_path)
 
         # 단어 타이밍 (자막용)
         words = slide.get("words", [])
