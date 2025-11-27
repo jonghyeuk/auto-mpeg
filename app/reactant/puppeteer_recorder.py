@@ -37,19 +37,17 @@ def record_html_to_video(html_path: Path, output_video: Path, duration: float = 
 
         result = subprocess.run(
             ['node', str(temp_script_path)],
-            capture_output=True,
+            capture_output=False,  # 실시간 출력 보기
             text=True,
             encoding='utf-8',  # Windows cp949 인코딩 문제 방지
             errors='replace',  # 디코딩 에러 시 대체 문자 사용
-            timeout=duration + 60,  # 녹화 시간 + 여유 시간
+            timeout=duration + 180,  # 녹화 시간 + FFmpeg 변환 여유 시간
             cwd=str(project_root)  # 프로젝트 루트에서 실행
         )
 
         if result.returncode != 0:
-            print(f"  ❌ 녹화 실패:")
-            print(f"  stdout: {result.stdout}")
-            print(f"  stderr: {result.stderr}")
-            raise RuntimeError(f"Puppeteer 녹화 실패: {result.stderr}")
+            print(f"  ❌ 녹화 실패 (종료 코드: {result.returncode})")
+            raise RuntimeError(f"Puppeteer 녹화 실패 (종료 코드: {result.returncode})")
 
         print(f"  ✅ 녹화 완료!")
         print(f"  📁 저장됨: {output_video}")
