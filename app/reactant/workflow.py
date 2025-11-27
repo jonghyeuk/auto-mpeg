@@ -264,12 +264,12 @@ class ReactantWorkflow:
                 log_output = self.log("📦 STEP 6: HTML 플레이어 패키징", log_output)
                 log_output = self.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", log_output)
                 log_output = self.log("", log_output)
-                yield log_output, None, None, str(html_path)
+                yield log_output, None, str(html_path)
 
                 # ZIP 파일 생성
                 zip_path = config.OUTPUT_DIR / f"{output_name}_player.zip"
                 log_output = self.log("🗜️  ZIP 패키지 생성 중...", log_output)
-                yield log_output, None, None, str(html_path)
+                yield log_output, None, str(html_path)
 
                 self._create_zip_package(html_path, zip_path)
 
@@ -294,13 +294,13 @@ class ReactantWorkflow:
                 log_output = self.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", log_output)
                 log_output = self.log("", log_output)
                 log_output = self.log(f"⏱️  예상 소요 시간: {cumulative_time * 1.5 / 60:.1f}분", log_output)
-                yield log_output, None, None, None
+                yield log_output, None, None
 
                 output_video = config.OUTPUT_DIR / f"{output_name}.mp4"
 
                 log_output = self.log("📹 Puppeteer로 브라우저 녹화 시작...", log_output)
                 log_output = self.log(f"  - 녹화 시간: {cumulative_time:.1f}초", log_output)
-                yield log_output, None, None, None
+                yield log_output, None, None
 
                 record_html_to_video(html_path, output_video, duration=cumulative_time)
 
@@ -312,7 +312,7 @@ class ReactantWorkflow:
 
         except Exception as e:
             log_output = self.log(f"❌ 오류 발생: {str(e)}", log_output)
-            yield log_output, None, None, None
+            yield log_output, None, None
             raise
 
     def _create_zip_package(self, html_path: Path, zip_path: Path):
