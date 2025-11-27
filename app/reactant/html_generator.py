@@ -2,8 +2,8 @@
 HTML + 애니메이션 생성기
 AI 대화 스타일의 프레젠테이션 플레이어
 - 타이틀: 상단에 등장
-- 이미지: 중앙에 크게 표시
-- 자막: 하단에 TTS와 함께 한 줄씩 등장 (영화 자막 스타일)
+- 왼쪽: 자막 (TTS와 싱크, 문장 단위로 등장)
+- 오른쪽: 이미지
 """
 from pathlib import Path
 from typing import Dict, Any, List
@@ -19,10 +19,10 @@ def generate_html_with_animations(slides_with_timing: List[Dict], output_html: P
         output_html: 출력 HTML 파일 경로
         total_duration: 전체 영상 길이 (초)
     """
-    # 모든 오디오 파일을 하나로 합치기 위한 리스트
+    # 모든 오디오 파일 목록
     audio_files = [slide["audio_path"] for slide in slides_with_timing]
 
-    # 슬라이드 데이터 준비 (문장 단위로 자막 처리)
+    # 슬라이드 데이터 준비
     slides_data = prepare_slides_data_with_sentences(slides_with_timing)
 
     # HTML 템플릿 생성
@@ -31,8 +31,10 @@ def generate_html_with_animations(slides_with_timing: List[Dict], output_html: P
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PPT 프레젠테이션</title>
+    <title>PPT 강의</title>
     <style>
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&display=swap');
+
         * {{
             margin: 0;
             padding: 0;
@@ -42,11 +44,10 @@ def generate_html_with_animations(slides_with_timing: List[Dict], output_html: P
         body {{
             width: 1920px;
             height: 1080px;
-            background: linear-gradient(180deg, #0a1628 0%, #1a2a4a 100%);
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
             color: #fff;
-            font-family: 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif;
+            font-family: 'Noto Sans KR', sans-serif;
             overflow: hidden;
-            position: relative;
         }}
 
         /* ========== 시작 화면 ========== */
@@ -90,8 +91,6 @@ def generate_html_with_animations(slides_with_timing: List[Dict], output_html: P
 
         .play-button::after {{
             content: '';
-            width: 0;
-            height: 0;
             border-top: 30px solid transparent;
             border-bottom: 30px solid transparent;
             border-left: 50px solid #1a1a2e;
@@ -102,8 +101,6 @@ def generate_html_with_animations(slides_with_timing: List[Dict], output_html: P
             font-size: 48px;
             font-weight: 700;
             margin-bottom: 30px;
-            color: #fff;
-            text-shadow: 2px 2px 10px rgba(0,0,0,0.5);
         }}
 
         .start-subtitle {{
@@ -123,70 +120,135 @@ def generate_html_with_animations(slides_with_timing: List[Dict], output_html: P
         }}
 
         /* ========== 메인 레이아웃 ========== */
-        .presentation-container {{
+        .presentation {{
             width: 100%;
             height: 100%;
             display: none;
             flex-direction: column;
         }}
 
-        .presentation-container.active {{
+        .presentation.active {{
             display: flex;
         }}
 
-        /* 타이틀 영역 (상단) */
-        .title-area {{
-            height: 120px;
-            padding: 30px 60px;
+        /* 타이틀 영역 */
+        .title-bar {{
+            height: 100px;
+            padding: 25px 50px;
+            background: rgba(0, 0, 0, 0.3);
             display: flex;
             align-items: center;
-            justify-content: center;
+            justify-content: space-between;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
         }}
 
         .slide-title {{
-            font-size: 48px;
+            font-size: 36px;
             font-weight: 700;
             color: #fff;
-            text-align: center;
             opacity: 0;
-            transform: translateY(-30px);
-            transition: all 0.8s ease;
-            text-shadow: 2px 2px 20px rgba(0, 200, 255, 0.3);
+            transform: translateX(-20px);
+            transition: all 0.6s ease;
         }}
 
         .slide-title.visible {{
             opacity: 1;
+            transform: translateX(0);
+        }}
+
+        .slide-counter {{
+            font-size: 18px;
+            color: rgba(255,255,255,0.6);
+            background: rgba(0,0,0,0.3);
+            padding: 8px 20px;
+            border-radius: 20px;
+        }}
+
+        /* 콘텐츠 영역 (좌: 자막, 우: 이미지) */
+        .content-area {{
+            flex: 1;
+            display: flex;
+            padding: 40px;
+            gap: 40px;
+        }}
+
+        /* 왼쪽: 자막 영역 */
+        .subtitle-panel {{
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            padding: 40px;
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 20px;
+            overflow: hidden;
+        }}
+
+        .subtitle-container {{
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            max-height: 100%;
+            overflow-y: auto;
+        }}
+
+        /* 자막 라인 (AI 채팅 스타일) */
+        .subtitle-line {{
+            padding: 20px 30px;
+            background: linear-gradient(135deg, rgba(0, 200, 255, 0.15) 0%, rgba(0, 100, 200, 0.1) 100%);
+            border-left: 4px solid #00c8ff;
+            border-radius: 0 15px 15px 0;
+            font-size: 28px;
+            line-height: 1.6;
+            color: #fff;
+            opacity: 0;
+            transform: translateY(20px);
+            transition: all 0.4s ease;
+        }}
+
+        .subtitle-line.visible {{
+            opacity: 1;
             transform: translateY(0);
         }}
 
-        /* 콘텐츠 영역 (중앙 - 이미지) */
-        .content-area {{
+        .subtitle-line.speaking {{
+            background: linear-gradient(135deg, rgba(0, 255, 136, 0.2) 0%, rgba(0, 200, 100, 0.15) 100%);
+            border-left-color: #00ff88;
+            box-shadow: 0 5px 30px rgba(0, 255, 136, 0.2);
+        }}
+
+        .subtitle-line .highlight {{
+            color: #00ff88;
+            font-weight: 600;
+        }}
+
+        /* 오른쪽: 이미지 영역 */
+        .image-panel {{
             flex: 1;
             display: flex;
             justify-content: center;
             align-items: center;
-            padding: 20px 80px;
-            position: relative;
+            padding: 20px;
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 20px;
         }}
 
         .image-container {{
-            max-width: 1400px;
-            max-height: 600px;
+            max-width: 100%;
+            max-height: 100%;
             display: flex;
             justify-content: center;
             align-items: center;
-            gap: 40px;
-            flex-wrap: wrap;
         }}
 
         .slide-image {{
             max-width: 100%;
-            max-height: 550px;
+            max-height: 700px;
             object-fit: contain;
-            border-radius: 16px;
+            border-radius: 15px;
             box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
             opacity: 0;
-            transform: scale(0.8);
+            transform: scale(0.9);
             transition: all 0.8s cubic-bezier(0.4, 0, 0.2, 1);
         }}
 
@@ -195,38 +257,28 @@ def generate_html_with_animations(slides_with_timing: List[Dict], output_html: P
             transform: scale(1);
         }}
 
-        /* 자막 영역 (하단) */
-        .subtitle-area {{
-            height: 200px;
-            padding: 30px 100px;
+        /* 이미지 없을 때 플레이스홀더 */
+        .no-image {{
+            width: 100%;
+            height: 400px;
             display: flex;
             flex-direction: column;
             justify-content: center;
             align-items: center;
-            background: linear-gradient(0deg, rgba(0,0,0,0.8) 0%, transparent 100%);
+            background: rgba(255,255,255,0.05);
+            border-radius: 15px;
+            border: 2px dashed rgba(255,255,255,0.2);
         }}
 
-        .subtitle-text {{
-            font-size: 36px;
-            line-height: 1.6;
-            color: #fff;
-            text-align: center;
-            text-shadow: 2px 2px 8px rgba(0, 0, 0, 0.9);
-            max-width: 1600px;
-            opacity: 0;
-            transform: translateY(20px);
-            transition: all 0.4s ease;
+        .no-image-icon {{
+            font-size: 80px;
+            margin-bottom: 20px;
+            opacity: 0.5;
         }}
 
-        .subtitle-text.visible {{
-            opacity: 1;
-            transform: translateY(0);
-        }}
-
-        /* 현재 읽고 있는 단어 강조 */
-        .subtitle-text .current-word {{
-            color: #00c8ff;
-            font-weight: 600;
+        .no-image-text {{
+            font-size: 20px;
+            color: rgba(255,255,255,0.5);
         }}
 
         /* ========== 진행 바 ========== */
@@ -234,7 +286,7 @@ def generate_html_with_animations(slides_with_timing: List[Dict], output_html: P
             position: fixed;
             bottom: 0;
             left: 0;
-            height: 4px;
+            height: 5px;
             background: linear-gradient(90deg, #00c8ff, #00ff88);
             width: 0%;
             transition: width 0.1s linear;
@@ -244,18 +296,17 @@ def generate_html_with_animations(slides_with_timing: List[Dict], output_html: P
         /* ========== 컨트롤 바 ========== */
         .control-bar {{
             position: fixed;
-            bottom: 30px;
+            bottom: 25px;
             left: 50%;
             transform: translateX(-50%);
             display: flex;
             gap: 15px;
             padding: 12px 25px;
-            background: rgba(0,0,0,0.8);
+            background: rgba(0,0,0,0.85);
             border-radius: 40px;
             opacity: 0;
             transition: opacity 0.3s;
             z-index: 100;
-            border: 1px solid rgba(255,255,255,0.1);
         }}
 
         body:hover .control-bar {{
@@ -290,89 +341,96 @@ def generate_html_with_animations(slides_with_timing: List[Dict], output_html: P
             font-family: monospace;
         }}
 
-        /* 슬라이드 인디케이터 */
-        .slide-indicator {{
-            position: fixed;
-            top: 20px;
-            right: 30px;
-            padding: 10px 20px;
-            background: rgba(0,0,0,0.6);
-            border-radius: 20px;
-            font-size: 16px;
-            color: rgba(255,255,255,0.8);
-            z-index: 100;
-        }}
-
         audio {{
             display: none;
+        }}
+
+        /* 스크롤바 스타일 */
+        .subtitle-container::-webkit-scrollbar {{
+            width: 6px;
+        }}
+
+        .subtitle-container::-webkit-scrollbar-track {{
+            background: rgba(255,255,255,0.1);
+            border-radius: 3px;
+        }}
+
+        .subtitle-container::-webkit-scrollbar-thumb {{
+            background: rgba(0, 200, 255, 0.5);
+            border-radius: 3px;
         }}
     </style>
 </head>
 <body>
     <!-- 시작 화면 -->
     <div class="start-screen" id="startScreen">
-        <div class="start-title">📽️ 프레젠테이션</div>
+        <div class="start-title">📚 PPT 강의</div>
         <div class="play-button" id="playButton"></div>
         <div class="start-subtitle">클릭하여 시작</div>
         <div class="duration-badge">⏱️ {int(total_duration // 60)}분 {int(total_duration % 60)}초</div>
     </div>
 
     <!-- 메인 프레젠테이션 -->
-    <div class="presentation-container" id="presentation">
-        <!-- 슬라이드 인디케이터 -->
-        <div class="slide-indicator" id="slideIndicator">1 / {len(slides_with_timing)}</div>
-
-        <!-- 타이틀 영역 -->
-        <div class="title-area">
+    <div class="presentation" id="presentation">
+        <!-- 타이틀 바 -->
+        <div class="title-bar">
             <div class="slide-title" id="slideTitle"></div>
+            <div class="slide-counter" id="slideCounter">1 / {len(slides_with_timing)}</div>
         </div>
 
-        <!-- 이미지 영역 -->
+        <!-- 콘텐츠 영역 -->
         <div class="content-area">
-            <div class="image-container" id="imageContainer"></div>
-        </div>
+            <!-- 왼쪽: 자막 -->
+            <div class="subtitle-panel">
+                <div class="subtitle-container" id="subtitleContainer"></div>
+            </div>
 
-        <!-- 자막 영역 -->
-        <div class="subtitle-area">
-            <div class="subtitle-text" id="subtitleText"></div>
+            <!-- 오른쪽: 이미지 -->
+            <div class="image-panel">
+                <div class="image-container" id="imageContainer">
+                    <div class="no-image">
+                        <div class="no-image-icon">🖼️</div>
+                        <div class="no-image-text">이미지 준비 중...</div>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 
     <div class="progress-bar" id="progressBar"></div>
 
     <!-- 컨트롤 바 -->
-    <div class="control-bar" id="controlBar">
+    <div class="control-bar">
         <button class="control-btn" id="pauseBtn">⏸</button>
         <button class="control-btn" id="restartBtn">↻</button>
         <div class="time-display">
-            <span id="currentTimeDisplay">0:00</span>&nbsp;/&nbsp;<span id="totalTimeDisplay">{int(total_duration // 60)}:{int(total_duration % 60):02d}</span>
+            <span id="currentTime">0:00</span>&nbsp;/&nbsp;{int(total_duration // 60)}:{int(total_duration % 60):02d}
         </div>
     </div>
 
-    <!-- 오디오 플레이어 (숨김) -->
+    <!-- 오디오 -->
     {generate_audio_html(audio_files)}
 
     <script>
-        // 슬라이드 데이터
         const slidesData = {json.dumps(slides_data, ensure_ascii=False)};
         const totalDuration = {total_duration};
         const totalSlides = {len(slides_with_timing)};
 
-        let currentTime = 0;
         let currentSlideIndex = 0;
+        let currentSentenceIndex = 0;
         let audioElements = [];
         let isPlaying = false;
         let isPaused = false;
-        let animationId = null;
+        let currentTime = 0;
 
         // DOM 요소
         const slideTitle = document.getElementById('slideTitle');
+        const slideCounter = document.getElementById('slideCounter');
+        const subtitleContainer = document.getElementById('subtitleContainer');
         const imageContainer = document.getElementById('imageContainer');
-        const subtitleText = document.getElementById('subtitleText');
-        const slideIndicator = document.getElementById('slideIndicator');
         const progressBar = document.getElementById('progressBar');
 
-        // 오디오 요소 로드
+        // 오디오 로드
         function loadAudioElements() {{
             slidesData.forEach((slide, index) => {{
                 const audio = document.getElementById(`audio-${{index}}`);
@@ -380,7 +438,15 @@ def generate_html_with_animations(slides_with_timing: List[Dict], output_html: P
                     audioElements.push(audio);
                     audio.addEventListener('ended', () => {{
                         if (index < slidesData.length - 1) {{
-                            transitionToSlide(index + 1);
+                            goToSlide(index + 1);
+                        }}
+                    }});
+
+                    // 오디오 진행에 따라 자막 업데이트
+                    audio.addEventListener('timeupdate', () => {{
+                        if (currentSlideIndex === index) {{
+                            updateSubtitles(index, audio.currentTime);
+                            updateProgress(slide.start_time + audio.currentTime);
                         }}
                     }});
                 }}
@@ -388,125 +454,107 @@ def generate_html_with_animations(slides_with_timing: List[Dict], output_html: P
         }}
 
         // 슬라이드 전환
-        function transitionToSlide(newIndex) {{
-            if (newIndex < 0 || newIndex >= slidesData.length) return;
+        function goToSlide(index) {{
+            if (index < 0 || index >= slidesData.length) return;
 
-            currentSlideIndex = newIndex;
-            const slide = slidesData[newIndex];
+            currentSlideIndex = index;
+            currentSentenceIndex = 0;
+            const slide = slidesData[index];
 
-            // 슬라이드 인디케이터 업데이트
-            slideIndicator.textContent = `${{newIndex + 1}} / ${{totalSlides}}`;
+            // 카운터 업데이트
+            slideCounter.textContent = `${{index + 1}} / ${{totalSlides}}`;
 
-            // 타이틀 업데이트 (애니메이션)
+            // 타이틀 업데이트
             slideTitle.classList.remove('visible');
             setTimeout(() => {{
-                slideTitle.textContent = slide.title || '';
-                if (slide.title) {{
-                    slideTitle.classList.add('visible');
-                }}
-            }}, 200);
+                slideTitle.textContent = slide.title || `슬라이드 ${{index + 1}}`;
+                slideTitle.classList.add('visible');
+            }}, 100);
 
-            // 이미지 업데이트 (애니메이션)
-            imageContainer.innerHTML = '';
-            if (slide.images && slide.images.length > 0) {{
-                slide.images.forEach((imgPath, idx) => {{
-                    const img = document.createElement('img');
-                    img.className = 'slide-image';
-                    img.src = imgPath;
-                    img.alt = `Slide ${{newIndex + 1}} Image ${{idx + 1}}`;
-                    imageContainer.appendChild(img);
+            // 이미지 업데이트
+            updateImages(slide.images);
 
-                    // 순차적으로 이미지 표시
-                    setTimeout(() => {{
-                        img.classList.add('visible');
-                    }}, 300 + (idx * 200));
-                }});
-            }}
-
-            // 자막 초기화
-            subtitleText.classList.remove('visible');
-            subtitleText.innerHTML = '';
+            // 자막 초기화 - 문장들을 미리 생성 (숨김 상태)
+            initSubtitles(slide.sentences);
 
             // 오디오 재생
-            if (audioElements[newIndex] && !isPaused) {{
-                audioElements[newIndex].currentTime = 0;
-                audioElements[newIndex].play();
+            if (audioElements[index] && !isPaused) {{
+                audioElements[index].currentTime = 0;
+                audioElements[index].play();
             }}
         }}
 
-        // 자막 업데이트 (단어별 하이라이트)
-        function updateSubtitle(slideIndex, localTime) {{
+        // 이미지 업데이트
+        function updateImages(images) {{
+            if (images && images.length > 0) {{
+                imageContainer.innerHTML = images.map((src, idx) =>
+                    `<img class="slide-image" src="${{src}}" alt="슬라이드 이미지" onload="this.classList.add('visible')">`
+                ).join('');
+            }} else {{
+                imageContainer.innerHTML = `
+                    <div class="no-image">
+                        <div class="no-image-icon">📊</div>
+                        <div class="no-image-text">텍스트 슬라이드</div>
+                    </div>
+                `;
+            }}
+        }}
+
+        // 자막 초기화 (문장들을 미리 생성)
+        function initSubtitles(sentences) {{
+            subtitleContainer.innerHTML = '';
+            if (!sentences || sentences.length === 0) return;
+
+            sentences.forEach((sentence, idx) => {{
+                const line = document.createElement('div');
+                line.className = 'subtitle-line';
+                line.id = `sentence-${{idx}}`;
+                line.textContent = sentence.text;
+                subtitleContainer.appendChild(line);
+            }});
+        }}
+
+        // 자막 업데이트 (시간에 따라 표시)
+        function updateSubtitles(slideIndex, localTime) {{
             const slide = slidesData[slideIndex];
-            if (!slide || !slide.words || slide.words.length === 0) return;
+            if (!slide || !slide.sentences) return;
 
-            // 현재 시간에 해당하는 단어 찾기
-            let currentWordIndex = -1;
-            for (let i = 0; i < slide.words.length; i++) {{
-                const word = slide.words[i];
-                if (localTime >= word.start && localTime <= word.end) {{
-                    currentWordIndex = i;
-                    break;
+            slide.sentences.forEach((sentence, idx) => {{
+                const element = document.getElementById(`sentence-${{idx}}`);
+                if (!element) return;
+
+                if (localTime >= sentence.start) {{
+                    element.classList.add('visible');
+
+                    // 현재 읽고 있는 문장 강조
+                    if (localTime >= sentence.start && localTime <= sentence.end) {{
+                        element.classList.add('speaking');
+                    }} else {{
+                        element.classList.remove('speaking');
+                    }}
                 }}
-            }}
+            }});
 
-            // 주변 컨텍스트 (앞뒤 몇 단어) 표시
-            const contextRange = 8; // 현재 단어 앞뒤로 8개씩
-            let startIdx = Math.max(0, currentWordIndex - contextRange);
-            let endIdx = Math.min(slide.words.length, currentWordIndex + contextRange + 1);
-
-            // 표시할 단어들 구성
-            let displayWords = [];
-            for (let i = startIdx; i < endIdx; i++) {{
-                const word = slide.words[i];
-                if (i === currentWordIndex) {{
-                    displayWords.push(`<span class="current-word">${{word.word}}</span>`);
-                }} else {{
-                    displayWords.push(word.word);
-                }}
-            }}
-
-            if (displayWords.length > 0) {{
-                subtitleText.innerHTML = displayWords.join(' ');
-                subtitleText.classList.add('visible');
+            // 자동 스크롤
+            const speakingElement = subtitleContainer.querySelector('.speaking');
+            if (speakingElement) {{
+                speakingElement.scrollIntoView({{ behavior: 'smooth', block: 'center' }});
             }}
         }}
 
-        // 시간 포맷팅
+        // 진행바 업데이트
+        function updateProgress(time) {{
+            currentTime = time;
+            const progress = Math.min((time / totalDuration) * 100, 100);
+            progressBar.style.width = progress + '%';
+            document.getElementById('currentTime').textContent = formatTime(time);
+        }}
+
+        // 시간 포맷
         function formatTime(seconds) {{
             const mins = Math.floor(seconds / 60);
             const secs = Math.floor(seconds % 60);
             return `${{mins}}:${{secs.toString().padStart(2, '0')}}`;
-        }}
-
-        // 메인 타임라인 업데이트
-        function updateTimeline() {{
-            if (isPaused) {{
-                animationId = requestAnimationFrame(updateTimeline);
-                return;
-            }}
-
-            const slide = slidesData[currentSlideIndex];
-            const audio = audioElements[currentSlideIndex];
-
-            if (audio) {{
-                const localTime = audio.currentTime;
-                currentTime = slide.start_time + localTime;
-
-                // 자막 업데이트
-                updateSubtitle(currentSlideIndex, localTime);
-            }}
-
-            // 진행바 업데이트
-            const progress = Math.min((currentTime / totalDuration) * 100, 100);
-            progressBar.style.width = progress + '%';
-
-            // 시간 표시 업데이트
-            document.getElementById('currentTimeDisplay').textContent = formatTime(currentTime);
-
-            // 종료 조건
-            if (currentTime < totalDuration) {{
-                animationId = requestAnimationFrame(updateTimeline);
-            }}
         }}
 
         // 재생 시작
@@ -514,22 +562,19 @@ def generate_html_with_animations(slides_with_timing: List[Dict], output_html: P
             document.getElementById('startScreen').classList.add('hidden');
             document.getElementById('presentation').classList.add('active');
             isPlaying = true;
-            isPaused = false;
-
-            transitionToSlide(0);
-            animationId = requestAnimationFrame(updateTimeline);
+            goToSlide(0);
         }}
 
-        // 일시정지/재개
+        // 일시정지
         function togglePause() {{
             isPaused = !isPaused;
-            const pauseBtn = document.getElementById('pauseBtn');
+            const btn = document.getElementById('pauseBtn');
 
             if (isPaused) {{
-                pauseBtn.textContent = '▶';
-                audioElements.forEach(audio => audio.pause());
+                btn.textContent = '▶';
+                audioElements.forEach(a => a.pause());
             }} else {{
-                pauseBtn.textContent = '⏸';
+                btn.textContent = '⏸';
                 if (audioElements[currentSlideIndex]) {{
                     audioElements[currentSlideIndex].play();
                 }}
@@ -538,43 +583,32 @@ def generate_html_with_animations(slides_with_timing: List[Dict], output_html: P
 
         // 재시작
         function restart() {{
-            audioElements.forEach(audio => {{
-                audio.pause();
-                audio.currentTime = 0;
+            audioElements.forEach(a => {{
+                a.pause();
+                a.currentTime = 0;
             }});
-
-            currentTime = 0;
             isPaused = false;
             document.getElementById('pauseBtn').textContent = '⏸';
-
-            transitionToSlide(0);
+            goToSlide(0);
         }}
 
-        // 초기 실행
+        // 초기화
         window.addEventListener('DOMContentLoaded', () => {{
             loadAudioElements();
 
-            // 시작 버튼
             document.getElementById('playButton').addEventListener('click', startPlayback);
-            document.getElementById('startScreen').addEventListener('click', (e) => {{
-                if (!e.target.closest('.play-button')) {{
-                    startPlayback();
-                }}
+            document.getElementById('startScreen').addEventListener('click', e => {{
+                if (e.target.id !== 'playButton') startPlayback();
             }});
 
-            // 컨트롤 버튼
             document.getElementById('pauseBtn').addEventListener('click', togglePause);
             document.getElementById('restartBtn').addEventListener('click', restart);
 
-            // 키보드 단축키
-            document.addEventListener('keydown', (e) => {{
+            document.addEventListener('keydown', e => {{
                 if (e.code === 'Space') {{
                     e.preventDefault();
-                    if (!isPlaying) {{
-                        startPlayback();
-                    }} else {{
-                        togglePause();
-                    }}
+                    if (!isPlaying) startPlayback();
+                    else togglePause();
                 }}
             }});
         }});
@@ -605,50 +639,66 @@ def generate_audio_html(audio_files: List[str]) -> str:
 
 
 def prepare_slides_data_with_sentences(slides_with_timing: List[Dict]) -> List[Dict]:
-    """슬라이드 데이터를 JavaScript용으로 정리 (문장 단위 자막 포함)"""
+    """슬라이드 데이터를 JavaScript용으로 정리 (문장 단위 자막)"""
     prepared = []
 
     for slide in slides_with_timing:
-        # 타이틀 추출 (첫 번째 텍스트 또는 짧은 텍스트)
+        # 타이틀 추출
         texts = slide.get("texts", [])
-        title = ""
-        if texts:
-            # 첫 번째 텍스트를 타이틀로 사용
-            title = texts[0].get("text", "") if texts else ""
+        title = texts[0].get("text", "") if texts else ""
 
         # 이미지 경로 추출 (상대 경로로 변환)
         images = []
         for img in slide.get("images", []):
             img_path = img.get("path", "")
             if img_path:
-                # 절대 경로인 경우 상대 경로로 변환
                 img_path_obj = Path(img_path)
                 if img_path_obj.is_absolute():
-                    # elements/filename.png 형식으로 변환
                     relative_path = f"elements/{img_path_obj.name}"
                 elif "elements" in img_path:
-                    # 이미 상대 경로이면 그대로 사용
                     relative_path = img_path
                 else:
                     relative_path = f"elements/{img_path_obj.name}"
                 images.append(relative_path)
 
-        # 단어 타이밍 (자막용)
+        # 단어 타이밍을 문장으로 그룹화
         words = slide.get("words", [])
-        # 상대 시간으로 변환 (슬라이드 시작 기준)
         start_time = slide.get("start_time", 0)
-        relative_words = []
-        for word in words:
-            relative_words.append({
-                "word": word["word"],
-                "start": word["start"] - start_time,
-                "end": word["end"] - start_time
-            })
+
+        sentences = []
+        if words:
+            # 문장 분리 (구두점 기준 또는 일정 단어 수)
+            current_sentence = []
+            sentence_start = 0
+
+            for i, word in enumerate(words):
+                rel_start = word["start"] - start_time
+                rel_end = word["end"] - start_time
+
+                if not current_sentence:
+                    sentence_start = rel_start
+
+                current_sentence.append(word["word"])
+
+                # 문장 끝 조건: 구두점 또는 7단어마다
+                is_end = (
+                    word["word"].endswith(('.', '?', '!', '다', '요', '죠')) or
+                    len(current_sentence) >= 7 or
+                    i == len(words) - 1
+                )
+
+                if is_end and current_sentence:
+                    sentences.append({
+                        "text": ' '.join(current_sentence),
+                        "start": round(sentence_start, 2),
+                        "end": round(rel_end, 2)
+                    })
+                    current_sentence = []
 
         prepared.append({
             "title": title,
             "images": images,
-            "words": relative_words,
+            "sentences": sentences,
             "start_time": start_time,
             "duration": slide.get("duration", 0)
         })
@@ -664,12 +714,12 @@ if __name__ == "__main__":
             "texts": [{"text": "반도체 8대 공정", "top": 500000, "left": 500000}],
             "images": [{"path": "elements/image_001.png"}],
             "words": [
-                {"word": "안녕하세요", "start": 0.0, "end": 0.5},
+                {"word": "안녕하세요.", "start": 0.0, "end": 0.5},
                 {"word": "오늘은", "start": 0.5, "end": 0.8},
                 {"word": "반도체", "start": 0.8, "end": 1.2},
                 {"word": "공정에", "start": 1.2, "end": 1.5},
                 {"word": "대해", "start": 1.5, "end": 1.8},
-                {"word": "알아보겠습니다", "start": 1.8, "end": 2.5}
+                {"word": "알아보겠습니다.", "start": 1.8, "end": 2.5}
             ],
             "images_timing": [],
             "audio_path": "audio/slide_001.mp3",
