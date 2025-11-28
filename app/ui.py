@@ -377,6 +377,14 @@ class GradioUI:
 - 형식: "키워드|시점초" (예: "머신러닝|2.5")
 - 한 줄에 하나씩 작성
 
+그 다음 <highlight> 태그 안에 (선택적):
+- 이 슬라이드가 **전체 강의의 핵심 포인트**라면, 화면 중앙에 크게 표시할 문구 작성
+- 전체 슬라이드 중 약 30%만 하이라이트 대상 (핵심 개념, 중요 결론 등)
+- 일반적인 설명 슬라이드라면 이 태그를 **비워두세요**
+- 형식: "강조문구|시점초" (예: "미세공정이 핵심이다|5.0")
+- 강조 문구는 짧고 임팩트 있게 (5~15자)
+- 대본에서 해당 문구가 언급되는 시점에 맞춰 시점 지정
+
 마지막으로 <script> 태그 안에 **정확히 {int(target_duration * 3.5)}자 내외**로
 마치 강의실에서 학생들에게 설명하듯이 자연스러운 구어체 강의 대본을 작성해주세요."""
 
@@ -399,9 +407,10 @@ class GradioUI:
             log_output = self.log(f"  - <script> 태그: {'✓' if has_script else '✗'}", log_output)
             log_output = self.log("", log_output)
 
-            # thinking, keywords, script 분리
+            # thinking, keywords, highlight, script 분리
             thinking = ""
             keywords = []
+            highlight = None  # 핵심 문구 하이라이트 (화면 중앙 표시용)
             script = ""
 
             if "<thinking>" in response_text and "</thinking>" in response_text:
@@ -423,6 +432,25 @@ class GradioUI:
                         try:
                             timing = float(parts[1].strip().replace('초', ''))
                             keywords.append({"text": keyword_text, "timing": timing})
+                        except:
+                            pass
+
+            # 하이라이트 파싱: "강조문구|시점" 형식
+            if "<highlight>" in response_text and "</highlight>" in response_text:
+                highlight_start = response_text.find("<highlight>") + len("<highlight>")
+                highlight_end = response_text.find("</highlight>")
+                highlight_text = response_text[highlight_start:highlight_end].strip()
+
+                if highlight_text and '|' in highlight_text:
+                    # 첫 번째 줄만 사용
+                    first_line = highlight_text.split('\n')[0].strip().lstrip('-').strip()
+                    if '|' in first_line:
+                        parts = first_line.split('|')
+                        try:
+                            highlight = {
+                                "text": parts[0].strip(),
+                                "timing": float(parts[1].strip().replace('초', ''))
+                            }
                         except:
                             pass
 
@@ -481,6 +509,12 @@ class GradioUI:
                 log_output = self.log("", log_output)
             else:
                 log_output = self.log("⚠️  키워드가 추출되지 않았습니다 (텍스트 애니메이션 없음)", log_output)
+                log_output = self.log("", log_output)
+
+            # 핵심 문구 하이라이트 표시
+            if highlight:
+                log_output = self.log("🌟 핵심 문구 (화면 중앙 강조):", log_output)
+                log_output = self.log(f"  「{highlight['text']}」 @ {highlight['timing']:.1f}초", log_output)
                 log_output = self.log("", log_output)
 
             # 최종 대본 표시
@@ -835,7 +869,8 @@ class GradioUI:
                     "index": slide["index"],
                     "script": script,
                     "keywords": keywords,  # 기존 키워드 (호환성 유지)
-                    "keyword_overlays": keyword_overlays  # 새로운 키워드 오버레이
+                    "keyword_overlays": keyword_overlays,  # 새로운 키워드 오버레이
+                    "highlight": highlight  # 핵심 문구 하이라이트 (화면 중앙 표시)
                 })
 
                 yield log_output, None

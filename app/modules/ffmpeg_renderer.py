@@ -44,10 +44,11 @@ class FFmpegRenderer:
         duration: float,
         output_path: Path,
         keyword_overlays: Optional[List[Dict[str, Any]]] = None,
-        enable_keyword_marking: bool = False
+        enable_keyword_marking: bool = False,
+        highlight: Optional[Dict[str, Any]] = None
     ) -> bool:
         """
-        단일 슬라이드 클립 생성 (이미지 + 오디오 + 키워드 마킹 오버레이)
+        단일 슬라이드 클립 생성 (이미지 + 오디오 + 키워드 마킹 오버레이 + 하이라이트)
 
         Args:
             image_path: 슬라이드 이미지 경로
@@ -56,6 +57,7 @@ class FFmpegRenderer:
             output_path: 출력 영상 경로
             keyword_overlays: 키워드 오버레이 리스트 [{"overlay_image": "path", "timing": 2.5, "found": True}, ...]
             enable_keyword_marking: 키워드 마킹 사용 여부
+            highlight: 핵심 문구 하이라이트 {"text": "강조문구", "timing": 5.0}
 
         Returns:
             성공 여부
@@ -103,50 +105,90 @@ class FFmpegRenderer:
             cmd.extend(["-i", str(audio_path)])  # 마지막 입력은 오디오
 
             # 필터 복잡성 구성
-            if overlay_inputs:
-                # 이미지가 이미 목표 해상도(1920x1080)로 스케일+패딩되어 있음
-                # 추가 스케일링 없이 그대로 사용
+            has_overlay = bool(overlay_inputs)
+            has_highlight = bool(highlight and highlight.get("text"))
+
+            if has_overlay or has_highlight:
+                # 복합 필터 구성
                 filter_complex = f"[0:v]format=yuv420p[base]"
-
-                # 각 오버레이에 대해 overlay 필터 추가
                 prev_label = "base"
-                for i, overlay_info in enumerate(overlay_inputs):
-                    timing = overlay_info.get("timing", 0)
-                    keyword = overlay_info.get("keyword", "Unknown")
+                final_label = "out"
 
-                    # 애니메이션 타이밍
-                    fade_in_start = max(0, timing - 0.5)
-                    fade_in_end = timing
-                    fade_out_start = timing + 2.0
-                    fade_out_end = timing + 2.5
+                # 키워드 오버레이 필터 추가
+                if has_overlay:
+                    for i, overlay_info in enumerate(overlay_inputs):
+                        timing = overlay_info.get("timing", 0)
+                        keyword = overlay_info.get("keyword", "Unknown")
 
-                    print(f"    🎬 '{keyword}': {fade_in_start:.1f}초 페이드인 → {timing:.1f}초 완전표시 → {fade_out_start:.1f}초 유지 → {fade_out_end:.1f}초 페이드아웃")
+                        # 애니메이션 타이밍
+                        fade_in_start = max(0, timing - 0.5)
+                        fade_in_end = timing
+                        fade_out_start = timing + 2.0
+                        fade_out_end = timing + 2.5
 
-                    # 알파 블렌딩 표현식 (fade in/out)
-                    alpha_expr = f"if(lt(t,{fade_in_end}),(t-{fade_in_start})/0.5,if(lt(t,{fade_out_start}),1,({fade_out_end}-t)/0.5))"
+                        print(f"    🎬 '{keyword}': {fade_in_start:.1f}초 페이드인 → {timing:.1f}초 완전표시 → {fade_out_start:.1f}초 유지 → {fade_out_end:.1f}초 페이드아웃")
 
-                    # 오버레이 입력 인덱스 (input 0은 base 이미지, input 1부터 오버레이)
-                    overlay_idx = i + 1
+                        # 오버레이 입력 인덱스 (input 0은 base 이미지, input 1부터 오버레이)
+                        overlay_idx = i + 1
 
-                    # 출력 레이블
-                    if i == len(overlay_inputs) - 1:
-                        # 마지막 오버레이
-                        out_label = "out"
-                    else:
-                        out_label = f"tmp{i}"
+                        # 출력 레이블
+                        is_last_overlay = (i == len(overlay_inputs) - 1)
+                        if is_last_overlay and not has_highlight:
+                            out_label = "out"
+                        else:
+                            out_label = f"tmp{i}"
 
-                    # overlay 필터 추가
-                    filter_complex += f";[{prev_label}][{overlay_idx}:v]overlay=enable='between(t,{fade_in_start},{fade_out_end})':format=auto:eval=frame,format=yuv420p[{out_label}]"
+                        # overlay 필터 추가
+                        filter_complex += f";[{prev_label}][{overlay_idx}:v]overlay=enable='between(t,{fade_in_start},{fade_out_end})':format=auto:eval=frame,format=yuv420p[{out_label}]"
+                        prev_label = out_label
 
-                    prev_label = out_label
+                # 하이라이트 텍스트 필터 추가 (화면 중앙에 크게 표시)
+                if has_highlight:
+                    hl_text = highlight["text"]
+                    hl_timing = highlight.get("timing", 3.0)
+                    hl_duration = 2.5  # 하이라이트 표시 시간
+
+                    # 타이밍 계산
+                    hl_start = max(0, hl_timing - 0.3)
+                    hl_end = hl_timing + hl_duration
+
+                    # 폰트 경로 (Windows/Linux 호환)
+                    font_path = get_font_path_with_fallback()
+                    # 경로에서 역슬래시를 슬래시로 변환 (FFmpeg 호환)
+                    font_path_escaped = str(font_path).replace('\\', '/').replace(':', '\\:')
+
+                    # 텍스트 이스케이프 (특수문자 처리)
+                    hl_text_escaped = hl_text.replace("'", "\\'").replace(":", "\\:")
+
+                    # 페이드 인/아웃 + 스케일 애니메이션 표현식
+                    # alpha: 0 → 1 → 1 → 0
+                    alpha_expr = f"if(lt(t,{hl_start}),0,if(lt(t,{hl_start + 0.3}),(t-{hl_start})/0.3,if(lt(t,{hl_end - 0.3}),1,({hl_end}-t)/0.3)))"
+
+                    print(f"    🌟 하이라이트 '{hl_text}': {hl_start:.1f}초 ~ {hl_end:.1f}초 (화면 중앙)")
+
+                    # drawtext 필터 추가
+                    drawtext_filter = (
+                        f"drawtext=fontfile='{font_path_escaped}'"
+                        f":text='{hl_text_escaped}'"
+                        f":fontsize=72"
+                        f":fontcolor=white"
+                        f":borderw=4"
+                        f":bordercolor=black"
+                        f":x=(w-text_w)/2"
+                        f":y=(h-text_h)/2"
+                        f":alpha='{alpha_expr}'"
+                        f":enable='between(t,{hl_start},{hl_end})'"
+                    )
+
+                    filter_complex += f";[{prev_label}]{drawtext_filter}[out]"
 
                 # filter_complex 추가
                 cmd.extend(["-filter_complex", filter_complex])
                 cmd.extend(["-map", "[out]"])  # 비디오 출력 매핑
-                cmd.extend(["-map", f"{len(overlay_inputs) + 1}:a"])  # 오디오 출력 매핑 (마지막 입력)
+                audio_input_idx = len(overlay_inputs) + 1 if has_overlay else 1
+                cmd.extend(["-map", f"{audio_input_idx}:a"])  # 오디오 출력 매핑
             else:
-                # 오버레이 없음: 이미지가 이미 목표 해상도로 스케일+패딩되어 있음
-                # 포맷 변환만 수행
+                # 오버레이/하이라이트 없음: 포맷 변환만 수행
                 cmd.extend(["-vf", "format=yuv420p"])
 
             # 공통 인코딩 옵션
@@ -482,13 +524,20 @@ class FFmpegRenderer:
 
         print(f"  슬라이드 {index}: 클립 생성 중...")
 
-        # 키워드 오버레이 가져오기
+        # 키워드 오버레이 및 하이라이트 가져오기
         keyword_overlays = []
-        if enable_keyword_marking and index in scripts_data:
-            keyword_overlays = scripts_data[index].get("keyword_overlays", [])
-            if keyword_overlays:
-                found_count = sum(1 for kw in keyword_overlays if kw.get("found"))
-                print(f"    → 키워드 마킹 {found_count}/{len(keyword_overlays)}개 추가")
+        highlight = None
+        if index in scripts_data:
+            if enable_keyword_marking:
+                keyword_overlays = scripts_data[index].get("keyword_overlays", [])
+                if keyword_overlays:
+                    found_count = sum(1 for kw in keyword_overlays if kw.get("found"))
+                    print(f"    → 키워드 마킹 {found_count}/{len(keyword_overlays)}개 추가")
+
+            # 하이라이트 가져오기
+            highlight = scripts_data[index].get("highlight")
+            if highlight:
+                print(f"    → 하이라이트: 「{highlight.get('text', '')}」 @ {highlight.get('timing', 0):.1f}초")
 
         # 클립 생성
         success = self.create_slide_clip(
@@ -497,7 +546,8 @@ class FFmpegRenderer:
             audio_info["duration"],
             clip_path,
             keyword_overlays=keyword_overlays,
-            enable_keyword_marking=enable_keyword_marking
+            enable_keyword_marking=enable_keyword_marking,
+            highlight=highlight
         )
 
         if success:
