@@ -49,6 +49,38 @@ class GradioUI:
         """로그 메시지 누적"""
         return log_text + message + "\n"
 
+    def parse_arrow_pointers(self, custom_request):
+        """
+        사용자 요청에서 $숫자 마커를 파싱하여 화살표 포인터 정보 추출
+
+        예: "$1 냉각보조장치" → {"marker": "$1", "keyword": "냉각보조장치"}
+            "$2 온도센서" → {"marker": "$2", "keyword": "온도센서"}
+
+        Returns:
+            list: [{"marker": "$1", "keyword": "키워드1"}, ...]
+        """
+        import re
+
+        if not custom_request:
+            return []
+
+        arrow_pointers = []
+
+        # $숫자 패턴 찾기: "$1 키워드" 또는 "$1키워드"
+        # $1 ~ $99까지 지원
+        pattern = r'\$(\d{1,2})\s*([^\n,$]+)'
+        matches = re.findall(pattern, custom_request)
+
+        for num, keyword in matches:
+            keyword = keyword.strip()
+            if keyword:
+                arrow_pointers.append({
+                    "marker": f"${num}",
+                    "keyword": keyword
+                })
+
+        return arrow_pointers
+
     def count_slides(self, pptx_file):
         """
         PPT 파일의 슬라이드 개수를 빠르게 카운트
@@ -377,6 +409,14 @@ class GradioUI:
 - 형식: "키워드|시점초" (예: "머신러닝|2.5")
 - 한 줄에 하나씩 작성
 
+그 다음 <highlight> 태그 안에 (선택적):
+- 이 슬라이드가 **전체 강의의 핵심 포인트**라면, 화면 중앙에 크게 표시할 문구 작성
+- 전체 슬라이드 중 약 30%만 하이라이트 대상 (핵심 개념, 중요 결론 등)
+- 일반적인 설명 슬라이드라면 이 태그를 **비워두세요**
+- 형식: "강조문구|시점초" (예: "미세공정이 핵심이다|5.0")
+- 강조 문구는 짧고 임팩트 있게 (5~15자)
+- 대본에서 해당 문구가 언급되는 시점에 맞춰 시점 지정
+
 마지막으로 <script> 태그 안에 **정확히 {int(target_duration * 3.5)}자 내외**로
 마치 강의실에서 학생들에게 설명하듯이 자연스러운 구어체 강의 대본을 작성해주세요."""
 
@@ -399,9 +439,10 @@ class GradioUI:
             log_output = self.log(f"  - <script> 태그: {'✓' if has_script else '✗'}", log_output)
             log_output = self.log("", log_output)
 
-            # thinking, keywords, script 분리
+            # thinking, keywords, highlight, script 분리
             thinking = ""
             keywords = []
+            highlight = None  # 핵심 문구 하이라이트 (화면 중앙 표시용)
             script = ""
 
             if "<thinking>" in response_text and "</thinking>" in response_text:
@@ -423,6 +464,25 @@ class GradioUI:
                         try:
                             timing = float(parts[1].strip().replace('초', ''))
                             keywords.append({"text": keyword_text, "timing": timing})
+                        except:
+                            pass
+
+            # 하이라이트 파싱: "강조문구|시점" 형식
+            if "<highlight>" in response_text and "</highlight>" in response_text:
+                highlight_start = response_text.find("<highlight>") + len("<highlight>")
+                highlight_end = response_text.find("</highlight>")
+                highlight_text = response_text[highlight_start:highlight_end].strip()
+
+                if highlight_text and '|' in highlight_text:
+                    # 첫 번째 줄만 사용
+                    first_line = highlight_text.split('\n')[0].strip().lstrip('-').strip()
+                    if '|' in first_line:
+                        parts = first_line.split('|')
+                        try:
+                            highlight = {
+                                "text": parts[0].strip(),
+                                "timing": float(parts[1].strip().replace('초', ''))
+                            }
                         except:
                             pass
 
@@ -468,11 +528,17 @@ class GradioUI:
                         original_timing = kw['timing']
                         diff = abs(calculated_timing - original_timing)
 
+                        # TTS보다 마킹이 먼저 나오면 안됨 → 0.4초 딜레이 추가
+                        MARKING_DELAY = 0.4
+
                         # 차이가 2초 이상이면 자동 보정
                         if diff > 2.0:
-                            log_output = self.log(f"  - {kw['text']}: {original_timing:.1f}초 → {calculated_timing:.1f}초 (단어 {words_before}/{total_words})", log_output)
-                            kw['timing'] = calculated_timing
+                            adjusted_timing = calculated_timing + MARKING_DELAY
+                            log_output = self.log(f"  - {kw['text']}: {original_timing:.1f}초 → {adjusted_timing:.1f}초 (단어 {words_before}/{total_words}, +딜레이)", log_output)
+                            kw['timing'] = adjusted_timing
                         else:
+                            # 원래 타이밍에도 딜레이 추가
+                            kw['timing'] = kw['timing'] + MARKING_DELAY
                             log_output = self.log(f"  - {kw['text']} ({kw['timing']:.1f}초)", log_output)
                     else:
                         # 대본에서 찾지 못한 경우 원래 타이밍 유지
@@ -481,6 +547,12 @@ class GradioUI:
                 log_output = self.log("", log_output)
             else:
                 log_output = self.log("⚠️  키워드가 추출되지 않았습니다 (텍스트 애니메이션 없음)", log_output)
+                log_output = self.log("", log_output)
+
+            # 핵심 문구 하이라이트 표시
+            if highlight:
+                log_output = self.log("🌟 핵심 문구 (화면 중앙 강조):", log_output)
+                log_output = self.log(f"  「{highlight['text']}」 @ {highlight['timing']:.1f}초", log_output)
                 log_output = self.log("", log_output)
 
             # 최종 대본 표시
@@ -544,7 +616,63 @@ class GradioUI:
                     log_output = self.log("", log_output)
                     keyword_overlays = []
 
-            return script, keywords, keyword_overlays, log_output
+            # $숫자 화살표 포인터 처리
+            arrow_pointers = []
+            parsed_arrows = self.parse_arrow_pointers(custom_request)
+            if parsed_arrows and slide_image_path:
+                try:
+                    log_output = self.log("🏹 화살표 포인터 처리:", log_output)
+
+                    # KeywordMarker를 사용하여 $숫자 위치 찾기
+                    marker = KeywordMarker(use_ocr=True)
+
+                    for arrow_info in parsed_arrows:
+                        arrow_marker = arrow_info["marker"]  # $1, $2, ...
+                        arrow_keyword = arrow_info["keyword"]
+
+                        # $숫자 마커 위치 찾기 (OCR)
+                        marker_results = marker.find_text_position(
+                            slide_image_path=str(slide_image_path),
+                            search_text=arrow_marker,
+                            pdf_path=pdf_path,
+                            page_num=page_num
+                        )
+
+                        if marker_results:
+                            # 마커 위치 (첫 번째 매칭 사용)
+                            marker_pos = marker_results[0]
+                            marker_x = marker_pos.get("x", 0)
+                            marker_y = marker_pos.get("y", 0)
+
+                            # 대본에서 키워드 위치로 타이밍 계산
+                            keyword_pos = script.lower().find(arrow_keyword.lower())
+                            if keyword_pos >= 0:
+                                text_before = script[:keyword_pos]
+                                words_before = len(text_before.split())
+                                total_words = len(script.split())
+                                word_ratio = words_before / max(total_words, 1)
+                                timing = word_ratio * estimated_duration + 0.4  # 딜레이 추가
+
+                                arrow_pointers.append({
+                                    "marker": arrow_marker,
+                                    "keyword": arrow_keyword,
+                                    "target_x": marker_x,
+                                    "target_y": marker_y,
+                                    "timing": timing
+                                })
+                                log_output = self.log(f"  ✓ {arrow_marker} '{arrow_keyword}' → 화살표 @{timing:.1f}초 (위치: {marker_x}, {marker_y})", log_output)
+                            else:
+                                log_output = self.log(f"  ⚠️ '{arrow_keyword}'가 대본에서 발견되지 않음", log_output)
+                        else:
+                            log_output = self.log(f"  ⚠️ {arrow_marker} 마커가 슬라이드에서 발견되지 않음", log_output)
+
+                    log_output = self.log("", log_output)
+
+                except Exception as e:
+                    log_output = self.log(f"  ⚠️ 화살표 포인터 처리 실패: {str(e)}", log_output)
+                    log_output = self.log("", log_output)
+
+            return script, keywords, keyword_overlays, highlight, arrow_pointers, log_output
 
         except Exception as e:
             log_output = self.log(f"❌ 대본 생성 실패: {str(e)}", log_output)
@@ -557,7 +685,7 @@ class GradioUI:
             log_output = self.log(f"⚠️  경고: 폴백 대본 사용 (PPT 원문)", log_output)
             log_output = self.log(f"→ {fallback_script[:50]}...", log_output)
             log_output = self.log("", log_output)
-            return fallback_script, [], [], log_output
+            return fallback_script, [], [], None, [], log_output
 
     def convert_ppt_to_video_router(
         self,
@@ -815,7 +943,7 @@ class GradioUI:
                 if hasattr(self, 'current_pdf_path'):
                     pdf_file_path = self.current_pdf_path
 
-                script, keywords, keyword_overlays, log_output = self.generate_script_with_thinking(
+                script, keywords, keyword_overlays, highlight, arrow_pointers, log_output = self.generate_script_with_thinking(
                     slide,
                     context_analysis,
                     i + 1,
@@ -835,7 +963,9 @@ class GradioUI:
                     "index": slide["index"],
                     "script": script,
                     "keywords": keywords,  # 기존 키워드 (호환성 유지)
-                    "keyword_overlays": keyword_overlays  # 새로운 키워드 오버레이
+                    "keyword_overlays": keyword_overlays,  # 새로운 키워드 오버레이
+                    "highlight": highlight,  # 핵심 문구 하이라이트 (화면 중앙 표시)
+                    "arrow_pointers": arrow_pointers  # $$$ 화살표 포인터
                 })
 
                 yield log_output, None
@@ -924,13 +1054,13 @@ class GradioUI:
                             word_ratio = words_before / max(total_words, 1)
                             new_timing = word_ratio * actual_duration
 
-                            # 약간의 보정: 문장 시작 부분은 조금 앞으로
-                            if word_ratio < 0.3:
-                                new_timing = max(0.5, new_timing * 0.9)
+                            # TTS보다 마킹이 먼저 나오면 안됨 → 0.4초 딜레이 추가
+                            MARKING_DELAY = 0.4
+                            new_timing = new_timing + MARKING_DELAY
 
                             # 타이밍 업데이트
                             kw_overlay['timing'] = new_timing
-                            log_output = self.log(f"    - '{keyword_text}': {old_timing:.1f}초 → {new_timing:.1f}초 (단어 {words_before}/{total_words})", log_output)
+                            log_output = self.log(f"    - '{keyword_text}': {old_timing:.1f}초 → {new_timing:.1f}초 (단어 {words_before}/{total_words}, +딜레이)", log_output)
 
             if timing_adjusted:
                 # 재조정된 타이밍으로 scripts.json 업데이트

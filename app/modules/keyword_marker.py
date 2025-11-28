@@ -476,6 +476,69 @@ class KeywordMarker:
 
         return results
 
+    def find_text_position(self, slide_image_path: str, search_text: str,
+                           pdf_path: str = None, page_num: int = None) -> List[Dict]:
+        """
+        슬라이드에서 특정 텍스트의 위치를 찾아 반환 (화살표 포인터용)
+
+        Args:
+            slide_image_path: 슬라이드 이미지 경로
+            search_text: 찾을 텍스트 (예: "$1", "$2")
+            pdf_path: PDF 파일 경로 (선택)
+            page_num: 페이지 번호 (선택)
+
+        Returns:
+            list: [{"x": 중심x, "y": 중심y, "bbox": (x0,y0,x1,y1), "text": 매칭된텍스트}, ...]
+        """
+        results = []
+
+        # PDF에서 먼저 찾기
+        if pdf_path and page_num is not None:
+            bbox = self.find_keyword_in_pdf(pdf_path, page_num, search_text)
+            if bbox:
+                # PDF 좌표 → 이미지 좌표 변환 필요
+                # (간단하게 OCR 결과 사용으로 대체)
+                pass
+
+        # OCR로 찾기
+        if self.use_ocr and self.ocr_reader:
+            try:
+                ocr_results = self.ocr_reader.readtext(slide_image_path)
+
+                # 정규화된 검색 텍스트
+                search_normalized = search_text.lower().strip()
+
+                for (bbox, text, confidence) in ocr_results:
+                    if confidence < 0.3:
+                        continue
+
+                    text_normalized = text.lower().strip()
+
+                    # 텍스트 매칭 (정확히 일치하거나 포함)
+                    if search_normalized == text_normalized or search_normalized in text_normalized:
+                        # bbox는 [[x0, y0], [x1, y0], [x1, y1], [x0, y1]] 형식
+                        x0 = int(min(point[0] for point in bbox))
+                        y0 = int(min(point[1] for point in bbox))
+                        x1 = int(max(point[0] for point in bbox))
+                        y1 = int(max(point[1] for point in bbox))
+
+                        # 중심점 계산
+                        center_x = (x0 + x1) // 2
+                        center_y = (y0 + y1) // 2
+
+                        results.append({
+                            "x": center_x,
+                            "y": center_y,
+                            "bbox": (x0, y0, x1, y1),
+                            "text": text,
+                            "confidence": confidence
+                        })
+
+            except Exception as e:
+                print(f"⚠️  텍스트 위치 찾기 실패: {e}")
+
+        return results
+
 
 if __name__ == "__main__":
     # 테스트 코드
