@@ -528,8 +528,8 @@ class GradioUI:
                         original_timing = kw['timing']
                         diff = abs(calculated_timing - original_timing)
 
-                        # TTS보다 마킹이 먼저 나오면 안됨 → 0.4초 딜레이 추가
-                        MARKING_DELAY = 0.4
+                        # TTS보다 마킹이 먼저 나오면 안됨 → 0.5초 딜레이 추가
+                        MARKING_DELAY = 0.5
 
                         # 차이가 2초 이상이면 자동 보정
                         if diff > 2.0:
@@ -651,7 +651,7 @@ class GradioUI:
                                 words_before = len(text_before.split())
                                 total_words = len(script.split())
                                 word_ratio = words_before / max(total_words, 1)
-                                timing = word_ratio * estimated_duration + 0.4  # 딜레이 추가
+                                timing = word_ratio * estimated_duration + 0.5  # 딜레이 추가
 
                                 arrow_pointers.append({
                                     "marker": arrow_marker,
@@ -1054,8 +1054,8 @@ class GradioUI:
                             word_ratio = words_before / max(total_words, 1)
                             new_timing = word_ratio * actual_duration
 
-                            # TTS보다 마킹이 먼저 나오면 안됨 → 0.4초 딜레이 추가
-                            MARKING_DELAY = 0.4
+                            # TTS보다 마킹이 먼저 나오면 안됨 → 0.5초 딜레이 추가
+                            MARKING_DELAY = 0.5
                             new_timing = new_timing + MARKING_DELAY
 
                             # 타이밍 업데이트

@@ -340,6 +340,28 @@ class KeywordMarker:
         output_dir.mkdir(parents=True, exist_ok=True)
         results = []
 
+        # 중복 마킹 방지를 위한 이미 마킹된 bbox 리스트
+        marked_bboxes = []
+
+        def is_bbox_overlapping(new_bbox, threshold=50):
+            """새 bbox가 이미 마킹된 bbox와 겹치는지 확인 (threshold 픽셀 이내)"""
+            if not new_bbox:
+                return False
+            new_x0, new_y0, new_x1, new_y1 = new_bbox
+            new_center_x = (new_x0 + new_x1) / 2
+            new_center_y = (new_y0 + new_y1) / 2
+
+            for marked in marked_bboxes:
+                marked_x0, marked_y0, marked_x1, marked_y1 = marked
+                marked_center_x = (marked_x0 + marked_x1) / 2
+                marked_center_y = (marked_y0 + marked_y1) / 2
+
+                # 중심점 거리 계산
+                distance = ((new_center_x - marked_center_x) ** 2 + (new_center_y - marked_center_y) ** 2) ** 0.5
+                if distance < threshold:
+                    return True
+            return False
+
         # 이미지 크기 가져오기
         img = cv2.imread(str(slide_image_path))
         if img is None:
@@ -422,6 +444,19 @@ class KeywordMarker:
 
             # 마킹하기
             if bbox:
+                # 중복 마킹 체크: 이미 마킹된 위치와 50픽셀 이내면 스킵
+                if is_bbox_overlapping(bbox, threshold=50):
+                    print(f"⚠️  키워드 '{keyword_text}' 중복 위치 → 스킵 (이미 마킹된 영역)")
+                    results.append({
+                        "keyword": keyword_text,
+                        "timing": timing,
+                        "overlay_image": None,
+                        "bbox": bbox,
+                        "found": False,
+                        "skipped": "duplicate_location"
+                    })
+                    continue
+
                 # bbox 유효성 검증
                 x0, y0, x1, y1 = bbox
                 if x0 < 0 or y0 < 0 or x1 > img_width or y1 > img_height or x0 >= x1 or y0 >= y1:
@@ -447,6 +482,8 @@ class KeywordMarker:
                         success = self.draw_underline_on_image(slide_image_path, bbox, str(output_path))
 
                 if success:
+                    # 마킹 성공 시 bbox를 marked_bboxes에 추가
+                    marked_bboxes.append(bbox)
                     results.append({
                         "keyword": keyword_text,
                         "timing": timing,
@@ -508,11 +545,18 @@ class KeywordMarker:
                 # 정규화된 검색 텍스트
                 search_normalized = search_text.lower().strip()
 
+                # 디버깅: OCR 결과 출력
+                print(f"  🔍 OCR 검색: '{search_text}' in {len(ocr_results)}개 텍스트 블록")
+
                 for (bbox, text, confidence) in ocr_results:
                     if confidence < 0.3:
                         continue
 
                     text_normalized = text.lower().strip()
+
+                    # 디버깅: 각 텍스트 블록 출력 ($ 포함된 것만)
+                    if '$' in text or search_normalized in text_normalized:
+                        print(f"    - '{text}' (신뢰도: {confidence:.2f})")
 
                     # 텍스트 매칭 (정확히 일치하거나 포함)
                     if search_normalized == text_normalized or search_normalized in text_normalized:
@@ -533,6 +577,7 @@ class KeywordMarker:
                             "text": text,
                             "confidence": confidence
                         })
+                        print(f"    ✓ 매칭됨: '{text}' @ ({center_x}, {center_y})")
 
             except Exception as e:
                 print(f"⚠️  텍스트 위치 찾기 실패: {e}")
