@@ -317,6 +317,85 @@ class KeywordMarker:
             print(f"⚠️  투명 오버레이 생성 실패: {e}")
             return False
 
+    def _bbox_overlap(self, bbox1: Tuple[float, float, float, float],
+                      bbox2: Tuple[float, float, float, float],
+                      threshold: float = 0.5) -> bool:
+        """
+        두 bbox가 일정 비율 이상 겹치는지 확인
+
+        Args:
+            bbox1: (x0, y0, x1, y1)
+            bbox2: (x0, y0, x1, y1)
+            threshold: 겹침 비율 임계값 (0.5 = 50% 이상 겹치면 True)
+
+        Returns:
+            겹침 여부
+        """
+        x0_1, y0_1, x1_1, y1_1 = bbox1
+        x0_2, y0_2, x1_2, y1_2 = bbox2
+
+        # 겹치는 영역 계산
+        x0_inter = max(x0_1, x0_2)
+        y0_inter = max(y0_1, y0_2)
+        x1_inter = min(x1_1, x1_2)
+        y1_inter = min(y1_1, y1_2)
+
+        # 겹치는 영역이 없으면 False
+        if x0_inter >= x1_inter or y0_inter >= y1_inter:
+            return False
+
+        # 겹치는 면적
+        inter_area = (x1_inter - x0_inter) * (y1_inter - y0_inter)
+
+        # 각 bbox의 면적
+        area1 = (x1_1 - x0_1) * (y1_1 - y0_1)
+        area2 = (x1_2 - x0_2) * (y1_2 - y0_2)
+
+        # 더 작은 bbox 기준으로 겹침 비율 계산
+        min_area = min(area1, area2)
+        if min_area <= 0:
+            return False
+
+        overlap_ratio = inter_area / min_area
+        return overlap_ratio >= threshold
+
+    def _is_nearby_marked(self, bbox: Tuple[float, float, float, float],
+                          marked_bboxes: List[Tuple[float, float, float, float]],
+                          distance_threshold: float = 50) -> bool:
+        """
+        bbox가 이미 마킹된 위치와 가까운지 확인
+
+        Args:
+            bbox: 확인할 bbox (x0, y0, x1, y1)
+            marked_bboxes: 이미 마킹된 bbox 리스트
+            distance_threshold: 거리 임계값 (픽셀)
+
+        Returns:
+            가까운 마킹이 있으면 True
+        """
+        if not marked_bboxes:
+            return False
+
+        x0, y0, x1, y1 = bbox
+        center_x = (x0 + x1) / 2
+        center_y = (y0 + y1) / 2
+
+        for marked_bbox in marked_bboxes:
+            # 겹침 확인
+            if self._bbox_overlap(bbox, marked_bbox, threshold=0.3):
+                return True
+
+            # 중심점 거리 확인
+            mx0, my0, mx1, my1 = marked_bbox
+            marked_center_x = (mx0 + mx1) / 2
+            marked_center_y = (my0 + my1) / 2
+
+            distance = ((center_x - marked_center_x) ** 2 + (center_y - marked_center_y) ** 2) ** 0.5
+            if distance < distance_threshold:
+                return True
+
+        return False
+
     def mark_keywords_on_slide(self, slide_image_path: str, keywords: List[Dict],
                                output_dir: Path, pdf_path: Optional[str] = None,
                                page_num: Optional[int] = None,
@@ -347,6 +426,9 @@ class KeywordMarker:
             return results
 
         img_height, img_width = img.shape[:2]
+
+        # 이미 마킹된 bbox 추적 (중복 방지용)
+        marked_bboxes = []
 
         # OCR 결과 캐싱: PPT인 경우(PDF 아닌 경우) 한 번만 OCR 실행
         ocr_cache = None
@@ -428,6 +510,19 @@ class KeywordMarker:
                     print(f"    ⚠️  bbox 범위 초과 또는 잘못됨: {bbox} (이미지: {img_width}x{img_height})")
                     print(f"    → 클리핑 적용")
 
+                # 중복 마킹 방지: 이미 마킹된 위치와 겹치는지 확인
+                if self._is_nearby_marked(bbox, marked_bboxes, distance_threshold=80):
+                    print(f"    ⚠️  키워드 '{keyword_text}' 중복 위치 - 스킵 (이미 마킹된 영역과 겹침)")
+                    results.append({
+                        "keyword": keyword_text,
+                        "timing": timing,
+                        "overlay_image": None,
+                        "bbox": bbox,
+                        "found": False,
+                        "skipped_reason": "duplicate_location"
+                    })
+                    continue
+
                 if create_overlay:
                     # 투명 오버레이 생성 (FFmpeg용)
                     # 한글 파일명 문제 방지를 위해 인덱스 기반 파일명 사용
@@ -447,6 +542,8 @@ class KeywordMarker:
                         success = self.draw_underline_on_image(slide_image_path, bbox, str(output_path))
 
                 if success:
+                    # 성공적으로 마킹된 bbox를 추적 리스트에 추가
+                    marked_bboxes.append(bbox)
                     results.append({
                         "keyword": keyword_text,
                         "timing": timing,
@@ -490,6 +587,7 @@ class KeywordMarker:
         Returns:
             list: [{"x": 중심x, "y": 중심y, "bbox": (x0,y0,x1,y1), "text": 매칭된텍스트}, ...]
         """
+        import re
         results = []
 
         # PDF에서 먼저 찾기
@@ -508,14 +606,48 @@ class KeywordMarker:
                 # 정규화된 검색 텍스트
                 search_normalized = search_text.lower().strip()
 
+                # $숫자 패턴 특별 처리 (예: "$1", "$2")
+                # OCR이 "$"를 "S", "5", "s" 등으로 잘못 인식할 수 있음
+                is_dollar_pattern = search_text.startswith("$") and len(search_text) >= 2
+                if is_dollar_pattern:
+                    # 숫자 부분 추출 (예: "$1" -> "1", "$12" -> "12")
+                    number_part = search_text[1:]
+                    # 가능한 OCR 변형 패턴들
+                    dollar_variants = [
+                        f"${number_part}",      # 원본
+                        f"s{number_part}",      # $ -> s
+                        f"S{number_part}",      # $ -> S
+                        f"5{number_part}",      # $ -> 5
+                        number_part,            # $ 누락
+                        f"${number_part}.",     # 뒤에 점 추가
+                        f"${number_part},",     # 뒤에 쉼표 추가
+                    ]
+                    print(f"    🔍 화살표 마커 '{search_text}' 검색 중... (변형 패턴: {dollar_variants})")
+
                 for (bbox, text, confidence) in ocr_results:
-                    if confidence < 0.3:
+                    if confidence < 0.2:  # 화살표 마커는 신뢰도 낮아도 허용
                         continue
 
                     text_normalized = text.lower().strip()
+                    text_clean = text.strip()
 
-                    # 텍스트 매칭 (정확히 일치하거나 포함)
-                    if search_normalized == text_normalized or search_normalized in text_normalized:
+                    # 매칭 여부
+                    matched = False
+
+                    # $숫자 패턴 특별 처리
+                    if is_dollar_pattern:
+                        for variant in dollar_variants:
+                            variant_lower = variant.lower()
+                            if variant_lower == text_normalized or variant_lower in text_normalized:
+                                matched = True
+                                print(f"    ✓ 화살표 마커 매칭: '{search_text}' -> '{text_clean}' (변형: {variant})")
+                                break
+                    else:
+                        # 일반 텍스트 매칭 (정확히 일치하거나 포함)
+                        if search_normalized == text_normalized or search_normalized in text_normalized:
+                            matched = True
+
+                    if matched:
                         # bbox는 [[x0, y0], [x1, y0], [x1, y1], [x0, y1]] 형식
                         x0 = int(min(point[0] for point in bbox))
                         y0 = int(min(point[1] for point in bbox))
@@ -536,6 +668,11 @@ class KeywordMarker:
 
             except Exception as e:
                 print(f"⚠️  텍스트 위치 찾기 실패: {e}")
+
+        # $숫자 패턴 결과 로깅 (블록 밖에서 변수 확인)
+        is_dollar_pattern_check = search_text.startswith("$") and len(search_text) >= 2
+        if is_dollar_pattern_check and not results:
+            print(f"    ⚠️ 화살표 마커 '{search_text}'를 찾지 못함 (흰색 글씨는 OCR 인식이 어려울 수 있음)")
 
         return results
 
