@@ -45,10 +45,11 @@ class FFmpegRenderer:
         output_path: Path,
         keyword_overlays: Optional[List[Dict[str, Any]]] = None,
         enable_keyword_marking: bool = False,
-        highlight: Optional[Dict[str, Any]] = None
+        highlight: Optional[Dict[str, Any]] = None,
+        arrow_pointers: Optional[List[Dict[str, Any]]] = None
     ) -> bool:
         """
-        단일 슬라이드 클립 생성 (이미지 + 오디오 + 키워드 마킹 오버레이 + 하이라이트)
+        단일 슬라이드 클립 생성 (이미지 + 오디오 + 키워드 마킹 오버레이 + 하이라이트 + 화살표)
 
         Args:
             image_path: 슬라이드 이미지 경로
@@ -58,6 +59,7 @@ class FFmpegRenderer:
             keyword_overlays: 키워드 오버레이 리스트 [{"overlay_image": "path", "timing": 2.5, "found": True}, ...]
             enable_keyword_marking: 키워드 마킹 사용 여부
             highlight: 핵심 문구 하이라이트 {"text": "강조문구", "timing": 5.0}
+            arrow_pointers: 화살표 포인터 리스트 [{"target_x": 100, "target_y": 200, "timing": 3.0}, ...]
 
         Returns:
             성공 여부
@@ -101,14 +103,28 @@ class FFmpegRenderer:
                 elif not keyword_overlays:
                     print("🔍 키워드 오버레이 데이터 없음")
 
+            # 화살표 포인터 이미지 입력 추가
+            arrow_inputs = []
+            if arrow_pointers:
+                # 화살표 PNG 경로
+                arrow_png = Path(__file__).parent.parent / "assets" / "arrow_pointer.png"
+                if arrow_png.exists():
+                    for arrow_info in arrow_pointers:
+                        cmd.extend(["-loop", "1", "-i", str(arrow_png)])
+                        arrow_inputs.append(arrow_info)
+                        print(f"    🏹 화살표 추가: {arrow_info.get('keyword', '')} @{arrow_info.get('timing', 0):.1f}초")
+                else:
+                    print(f"    ⚠️ 화살표 이미지 없음: {arrow_png}")
+
             # 오디오 입력
             cmd.extend(["-i", str(audio_path)])  # 마지막 입력은 오디오
 
             # 필터 복잡성 구성
             has_overlay = bool(overlay_inputs)
             has_highlight = bool(highlight and highlight.get("text"))
+            has_arrow = bool(arrow_inputs)
 
-            if has_overlay or has_highlight:
+            if has_overlay or has_highlight or has_arrow:
                 # 복합 필터 구성
                 filter_complex = f"[0:v]format=yuv420p[base]"
                 prev_label = "base"
@@ -133,13 +149,50 @@ class FFmpegRenderer:
 
                         # 출력 레이블
                         is_last_overlay = (i == len(overlay_inputs) - 1)
-                        if is_last_overlay and not has_highlight:
+                        if is_last_overlay and not has_arrow and not has_highlight:
                             out_label = "out"
                         else:
                             out_label = f"tmp{i}"
 
                         # overlay 필터 추가
                         filter_complex += f";[{prev_label}][{overlay_idx}:v]overlay=enable='between(t,{fade_in_start},{fade_out_end})':format=auto:eval=frame,format=yuv420p[{out_label}]"
+                        prev_label = out_label
+
+                # 화살표 포인터 오버레이 필터 추가
+                if has_arrow:
+                    # 화살표 입력 시작 인덱스 = 1 + 키워드오버레이 수
+                    arrow_start_idx = 1 + len(overlay_inputs)
+
+                    for i, arrow_info in enumerate(arrow_inputs):
+                        timing = arrow_info.get("timing", 0)
+                        target_x = arrow_info.get("target_x", 0)
+                        target_y = arrow_info.get("target_y", 0)
+                        keyword = arrow_info.get("keyword", "")
+
+                        # 애니메이션 타이밍 (2초간 표시)
+                        fade_in_start = max(0, timing - 0.3)
+                        fade_out_end = timing + 2.0
+
+                        # 화살표 위치 계산
+                        # 화살표 이미지는 200x200, 끝점(tip)이 (40, 160)
+                        # 따라서 오버레이 위치: x = target_x - 40, y = target_y - 160
+                        arrow_x = max(0, target_x - 40)
+                        arrow_y = max(0, target_y - 160)
+
+                        print(f"    🏹 '{keyword}': {fade_in_start:.1f}초 ~ {fade_out_end:.1f}초 (위치: {arrow_x}, {arrow_y})")
+
+                        # 화살표 입력 인덱스
+                        arrow_idx = arrow_start_idx + i
+
+                        # 출력 레이블
+                        is_last_arrow = (i == len(arrow_inputs) - 1)
+                        if is_last_arrow and not has_highlight:
+                            out_label = "out"
+                        else:
+                            out_label = f"arrow{i}"
+
+                        # overlay 필터 추가 (위치 지정 + 페이드)
+                        filter_complex += f";[{prev_label}][{arrow_idx}:v]overlay=x={arrow_x}:y={arrow_y}:enable='between(t,{fade_in_start},{fade_out_end})':format=auto:eval=frame,format=yuv420p[{out_label}]"
                         prev_label = out_label
 
                 # 하이라이트 텍스트 필터 추가 (화면 중앙에 크게 표시)
@@ -185,7 +238,8 @@ class FFmpegRenderer:
                 # filter_complex 추가
                 cmd.extend(["-filter_complex", filter_complex])
                 cmd.extend(["-map", "[out]"])  # 비디오 출력 매핑
-                audio_input_idx = len(overlay_inputs) + 1 if has_overlay else 1
+                # 오디오 입력 인덱스 = 1 + 키워드오버레이 수 + 화살표 수
+                audio_input_idx = 1 + len(overlay_inputs) + len(arrow_inputs)
                 cmd.extend(["-map", f"{audio_input_idx}:a"])  # 오디오 출력 매핑
             else:
                 # 오버레이/하이라이트 없음: 포맷 변환만 수행
@@ -524,9 +578,10 @@ class FFmpegRenderer:
 
         print(f"  슬라이드 {index}: 클립 생성 중...")
 
-        # 키워드 오버레이 및 하이라이트 가져오기
+        # 키워드 오버레이, 하이라이트, 화살표 포인터 가져오기
         keyword_overlays = []
         highlight = None
+        arrow_pointers = []
         if index in scripts_data:
             if enable_keyword_marking:
                 keyword_overlays = scripts_data[index].get("keyword_overlays", [])
@@ -539,6 +594,11 @@ class FFmpegRenderer:
             if highlight:
                 print(f"    → 하이라이트: 「{highlight.get('text', '')}」 @ {highlight.get('timing', 0):.1f}초")
 
+            # 화살표 포인터 가져오기
+            arrow_pointers = scripts_data[index].get("arrow_pointers", [])
+            if arrow_pointers:
+                print(f"    → 화살표 포인터 {len(arrow_pointers)}개 추가")
+
         # 클립 생성
         success = self.create_slide_clip(
             image_path,
@@ -547,7 +607,8 @@ class FFmpegRenderer:
             clip_path,
             keyword_overlays=keyword_overlays,
             enable_keyword_marking=enable_keyword_marking,
-            highlight=highlight
+            highlight=highlight,
+            arrow_pointers=arrow_pointers
         )
 
         if success:

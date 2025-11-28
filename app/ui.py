@@ -51,12 +51,13 @@ class GradioUI:
 
     def parse_arrow_pointers(self, custom_request):
         """
-        사용자 요청에서 $$$ 마커를 파싱하여 화살표 포인터 정보 추출
+        사용자 요청에서 $숫자 마커를 파싱하여 화살표 포인터 정보 추출
 
-        예: "$$$ 냉각보조장치" → {"keyword": "냉각보조장치"}
+        예: "$1 냉각보조장치" → {"marker": "$1", "keyword": "냉각보조장치"}
+            "$2 온도센서" → {"marker": "$2", "keyword": "온도센서"}
 
         Returns:
-            list: [{"keyword": "키워드1"}, {"keyword": "키워드2"}, ...]
+            list: [{"marker": "$1", "keyword": "키워드1"}, ...]
         """
         import re
 
@@ -65,14 +66,18 @@ class GradioUI:
 
         arrow_pointers = []
 
-        # $$$ 패턴 찾기: "$$$ 키워드" 또는 "$$$키워드"
-        pattern = r'\$\$\$\s*([^\n,]+)'
+        # $숫자 패턴 찾기: "$1 키워드" 또는 "$1키워드"
+        # $1 ~ $99까지 지원
+        pattern = r'\$(\d{1,2})\s*([^\n,$]+)'
         matches = re.findall(pattern, custom_request)
 
-        for match in matches:
-            keyword = match.strip()
+        for num, keyword in matches:
+            keyword = keyword.strip()
             if keyword:
-                arrow_pointers.append({"keyword": keyword})
+                arrow_pointers.append({
+                    "marker": f"${num}",
+                    "keyword": keyword
+                })
 
         return arrow_pointers
 
@@ -611,29 +616,30 @@ class GradioUI:
                     log_output = self.log("", log_output)
                     keyword_overlays = []
 
-            # $$$ 화살표 포인터 처리
+            # $숫자 화살표 포인터 처리
             arrow_pointers = []
             parsed_arrows = self.parse_arrow_pointers(custom_request)
             if parsed_arrows and slide_image_path:
                 try:
                     log_output = self.log("🏹 화살표 포인터 처리:", log_output)
 
-                    # KeywordMarker를 사용하여 $$$ 위치 찾기
+                    # KeywordMarker를 사용하여 $숫자 위치 찾기
                     marker = KeywordMarker(use_ocr=True)
 
                     for arrow_info in parsed_arrows:
+                        arrow_marker = arrow_info["marker"]  # $1, $2, ...
                         arrow_keyword = arrow_info["keyword"]
 
-                        # $$$ 마커 위치 찾기 (OCR)
+                        # $숫자 마커 위치 찾기 (OCR)
                         marker_results = marker.find_text_position(
                             slide_image_path=str(slide_image_path),
-                            search_text="$$$",
+                            search_text=arrow_marker,
                             pdf_path=pdf_path,
                             page_num=page_num
                         )
 
                         if marker_results:
-                            # $$$ 위치 (첫 번째 매칭 사용)
+                            # 마커 위치 (첫 번째 매칭 사용)
                             marker_pos = marker_results[0]
                             marker_x = marker_pos.get("x", 0)
                             marker_y = marker_pos.get("y", 0)
@@ -648,16 +654,17 @@ class GradioUI:
                                 timing = word_ratio * estimated_duration + 0.4  # 딜레이 추가
 
                                 arrow_pointers.append({
+                                    "marker": arrow_marker,
                                     "keyword": arrow_keyword,
                                     "target_x": marker_x,
                                     "target_y": marker_y,
                                     "timing": timing
                                 })
-                                log_output = self.log(f"  ✓ '{arrow_keyword}' → 화살표 @{timing:.1f}초 (위치: {marker_x}, {marker_y})", log_output)
+                                log_output = self.log(f"  ✓ {arrow_marker} '{arrow_keyword}' → 화살표 @{timing:.1f}초 (위치: {marker_x}, {marker_y})", log_output)
                             else:
                                 log_output = self.log(f"  ⚠️ '{arrow_keyword}'가 대본에서 발견되지 않음", log_output)
                         else:
-                            log_output = self.log(f"  ⚠️ $$$ 마커가 슬라이드에서 발견되지 않음", log_output)
+                            log_output = self.log(f"  ⚠️ {arrow_marker} 마커가 슬라이드에서 발견되지 않음", log_output)
 
                     log_output = self.log("", log_output)
 
