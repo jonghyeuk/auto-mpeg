@@ -516,41 +516,44 @@ class GradioUI:
             if keywords:
                 log_output = self.log("🔑 핵심 키워드 (텍스트 애니메이션):", log_output)
 
-                # 타이밍 자동 계산: 대본에서 키워드가 실제로 나오는 위치 기반 (단어 기준)
-                total_words = len(script.split())
-                estimated_duration = total_words * 0.4  # 단어당 약 0.4초 (평균 한국어 TTS)
+                # 타이밍 자동 계산: 대본에서 키워드가 실제로 나오는 위치 기반 (글자 수 기준 - 한국어에 더 정확)
+                total_chars = len(script)
+                # 한국어 TTS 평균 속도: 초당 약 4-5글자 (여유있게 4글자로 계산)
+                estimated_duration = total_chars / 4.0
+
+                # TTS보다 마킹이 먼저 나오면 안됨 → 딜레이 추가
+                # 마킹이 TTS 발화 직후에 나타나도록 (TTS 뒤 0.3~0.5초)
+                MARKING_DELAY = 0.5
+
                 for kw in keywords:
                     # 대본에서 키워드 위치 찾기
                     keyword_text = kw['text'].strip()
                     keyword_pos = script.find(keyword_text)
 
                     if keyword_pos >= 0:
-                        # 단어 기반 타이밍 계산 (더 정확함)
-                        text_before_keyword = script[:keyword_pos]
-                        words_before = len(text_before_keyword.split())
+                        # 글자 수 기반 타이밍 계산 (한국어에 더 정확)
+                        chars_before = keyword_pos
 
-                        # 단어 비율로 타이밍 계산
-                        word_ratio = words_before / max(total_words, 1)
-                        calculated_timing = word_ratio * estimated_duration
+                        # 글자 비율로 타이밍 계산
+                        char_ratio = chars_before / max(total_chars, 1)
+                        calculated_timing = char_ratio * estimated_duration
 
-                        # LLM이 제공한 타이밍과 비교
+                        # 딜레이 추가: TTS가 해당 단어를 말한 직후 마킹 표시
+                        adjusted_timing = calculated_timing + MARKING_DELAY
+
+                        # LLM이 제공한 타이밍과 비교 (참고용)
                         original_timing = kw['timing']
-                        diff = abs(calculated_timing - original_timing)
+                        diff = abs(adjusted_timing - original_timing)
 
-                        # TTS보다 마킹이 먼저 나오면 안됨 → 0.7초 딜레이 추가 (더 보수적)
-                        MARKING_DELAY = 0.7
-
-                        # 차이가 2초 이상이면 자동 보정
-                        if diff > 2.0:
-                            adjusted_timing = calculated_timing + MARKING_DELAY
-                            log_output = self.log(f"  - {kw['text']}: {original_timing:.1f}초 → {adjusted_timing:.1f}초 (단어 {words_before}/{total_words}, +딜레이)", log_output)
-                            kw['timing'] = adjusted_timing
+                        if diff > 1.0:
+                            log_output = self.log(f"  - {kw['text']}: {original_timing:.1f}초 → {adjusted_timing:.1f}초 (글자 {chars_before}/{total_chars}, 보정됨)", log_output)
                         else:
-                            # 원래 타이밍에도 딜레이 추가
-                            kw['timing'] = kw['timing'] + MARKING_DELAY
-                            log_output = self.log(f"  - {kw['text']} ({kw['timing']:.1f}초)", log_output)
+                            log_output = self.log(f"  - {kw['text']} @ {adjusted_timing:.1f}초 (글자 {chars_before}/{total_chars})", log_output)
+
+                        kw['timing'] = adjusted_timing
                     else:
-                        # 대본에서 찾지 못한 경우 원래 타이밍 유지
+                        # 대본에서 찾지 못한 경우 원래 타이밍에 딜레이 추가
+                        kw['timing'] = kw['timing'] + MARKING_DELAY
                         log_output = self.log(f"  - {kw['text']} ({kw['timing']:.1f}초) ⚠️ 대본에서 미발견", log_output)
 
                 log_output = self.log("", log_output)
@@ -653,14 +656,16 @@ class GradioUI:
                             marker_x = marker_pos.get("x", 0)
                             marker_y = marker_pos.get("y", 0)
 
-                            # 대본에서 키워드 위치로 타이밍 계산
+                            # 대본에서 키워드 위치로 타이밍 계산 (글자 수 기반)
                             keyword_pos = script.lower().find(arrow_keyword.lower())
                             if keyword_pos >= 0:
-                                text_before = script[:keyword_pos]
-                                words_before = len(text_before.split())
-                                total_words = len(script.split())
-                                word_ratio = words_before / max(total_words, 1)
-                                timing = word_ratio * estimated_duration + 0.7  # 딜레이 추가 (더 보수적)
+                                total_chars = len(script)
+                                chars_before = keyword_pos
+                                # 글자 비율로 타이밍 계산 (한국어 TTS: 초당 약 4글자)
+                                char_ratio = chars_before / max(total_chars, 1)
+                                arrow_estimated_duration = total_chars / 4.0
+                                # 딜레이 추가: TTS가 해당 단어를 말한 직후 화살표 표시
+                                timing = char_ratio * arrow_estimated_duration + 0.5
 
                                 arrow_pointers.append({
                                     "marker": arrow_marker,
@@ -1034,15 +1039,16 @@ class GradioUI:
                 if not keyword_overlays:
                     continue
 
-                # 예상 길이 (글자 수 기반)
-                estimated_duration = len(script_text) / 3.5
+                # 예상 길이 (글자 수 기반: 초당 4글자)
+                estimated_duration = len(script_text) / 4.0
 
-                # 실제 길이와 예상 길이 비교
-                if abs(actual_duration - estimated_duration) > 2.0:  # 2초 이상 차이
+                # 실제 TTS 길이와 예상 길이 비교
+                # 항상 실제 TTS 길이를 기준으로 재계산 (더 정확)
+                if abs(actual_duration - estimated_duration) > 1.0:  # 1초 이상 차이
                     timing_adjusted = True
                     log_output = self.log(f"  슬라이드 {i+1}: 예상 {estimated_duration:.1f}초 → 실제 {actual_duration:.1f}초", log_output)
 
-                    # 키워드 타이밍 재계산
+                    # 키워드 타이밍 재계산 (실제 TTS 길이 기반)
                     for kw_overlay in keyword_overlays:
                         if not kw_overlay.get('found'):
                             continue
@@ -1050,26 +1056,24 @@ class GradioUI:
                         keyword_text = kw_overlay['keyword']
                         old_timing = kw_overlay['timing']
 
-                        # 대본에서 키워드 위치 찾기 (단어 기반으로 계산)
+                        # 대본에서 키워드 위치 찾기 (글자 수 기반)
                         keyword_pos = script_text.find(keyword_text)
                         if keyword_pos >= 0:
-                            # 단어 기반 타이밍 계산 (더 정확함)
-                            # 키워드 앞에 있는 단어 수를 세기
-                            text_before_keyword = script_text[:keyword_pos]
-                            words_before = len(text_before_keyword.split())
-                            total_words = len(script_text.split())
+                            # 글자 수 기반 타이밍 계산 (실제 TTS 길이 사용)
+                            total_chars = len(script_text)
+                            chars_before = keyword_pos
 
-                            # 단어 비율로 타이밍 계산
-                            word_ratio = words_before / max(total_words, 1)
-                            new_timing = word_ratio * actual_duration
+                            # 글자 비율로 타이밍 계산
+                            char_ratio = chars_before / max(total_chars, 1)
+                            new_timing = char_ratio * actual_duration
 
-                            # TTS보다 마킹이 먼저 나오면 안됨 → 0.7초 딜레이 추가 (더 보수적)
-                            MARKING_DELAY = 0.7
+                            # TTS가 해당 단어를 말한 직후 마킹 표시 (0.5초 딜레이)
+                            MARKING_DELAY = 0.5
                             new_timing = new_timing + MARKING_DELAY
 
                             # 타이밍 업데이트
                             kw_overlay['timing'] = new_timing
-                            log_output = self.log(f"    - '{keyword_text}': {old_timing:.1f}초 → {new_timing:.1f}초 (단어 {words_before}/{total_words}, +딜레이)", log_output)
+                            log_output = self.log(f"    - '{keyword_text}': {old_timing:.1f}초 → {new_timing:.1f}초 (글자 {chars_before}/{total_chars})", log_output)
 
             if timing_adjusted:
                 # 재조정된 타이밍으로 scripts.json 업데이트
