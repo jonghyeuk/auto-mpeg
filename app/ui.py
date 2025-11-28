@@ -49,6 +49,33 @@ class GradioUI:
         """로그 메시지 누적"""
         return log_text + message + "\n"
 
+    def parse_arrow_pointers(self, custom_request):
+        """
+        사용자 요청에서 $$$ 마커를 파싱하여 화살표 포인터 정보 추출
+
+        예: "$$$ 냉각보조장치" → {"keyword": "냉각보조장치"}
+
+        Returns:
+            list: [{"keyword": "키워드1"}, {"keyword": "키워드2"}, ...]
+        """
+        import re
+
+        if not custom_request:
+            return []
+
+        arrow_pointers = []
+
+        # $$$ 패턴 찾기: "$$$ 키워드" 또는 "$$$키워드"
+        pattern = r'\$\$\$\s*([^\n,]+)'
+        matches = re.findall(pattern, custom_request)
+
+        for match in matches:
+            keyword = match.strip()
+            if keyword:
+                arrow_pointers.append({"keyword": keyword})
+
+        return arrow_pointers
+
     def count_slides(self, pptx_file):
         """
         PPT 파일의 슬라이드 개수를 빠르게 카운트
@@ -584,7 +611,61 @@ class GradioUI:
                     log_output = self.log("", log_output)
                     keyword_overlays = []
 
-            return script, keywords, keyword_overlays, highlight, log_output
+            # $$$ 화살표 포인터 처리
+            arrow_pointers = []
+            parsed_arrows = self.parse_arrow_pointers(custom_request)
+            if parsed_arrows and slide_image_path:
+                try:
+                    log_output = self.log("🏹 화살표 포인터 처리:", log_output)
+
+                    # KeywordMarker를 사용하여 $$$ 위치 찾기
+                    marker = KeywordMarker(use_ocr=True)
+
+                    for arrow_info in parsed_arrows:
+                        arrow_keyword = arrow_info["keyword"]
+
+                        # $$$ 마커 위치 찾기 (OCR)
+                        marker_results = marker.find_text_position(
+                            slide_image_path=str(slide_image_path),
+                            search_text="$$$",
+                            pdf_path=pdf_path,
+                            page_num=page_num
+                        )
+
+                        if marker_results:
+                            # $$$ 위치 (첫 번째 매칭 사용)
+                            marker_pos = marker_results[0]
+                            marker_x = marker_pos.get("x", 0)
+                            marker_y = marker_pos.get("y", 0)
+
+                            # 대본에서 키워드 위치로 타이밍 계산
+                            keyword_pos = script.lower().find(arrow_keyword.lower())
+                            if keyword_pos >= 0:
+                                text_before = script[:keyword_pos]
+                                words_before = len(text_before.split())
+                                total_words = len(script.split())
+                                word_ratio = words_before / max(total_words, 1)
+                                timing = word_ratio * estimated_duration + 0.4  # 딜레이 추가
+
+                                arrow_pointers.append({
+                                    "keyword": arrow_keyword,
+                                    "target_x": marker_x,
+                                    "target_y": marker_y,
+                                    "timing": timing
+                                })
+                                log_output = self.log(f"  ✓ '{arrow_keyword}' → 화살표 @{timing:.1f}초 (위치: {marker_x}, {marker_y})", log_output)
+                            else:
+                                log_output = self.log(f"  ⚠️ '{arrow_keyword}'가 대본에서 발견되지 않음", log_output)
+                        else:
+                            log_output = self.log(f"  ⚠️ $$$ 마커가 슬라이드에서 발견되지 않음", log_output)
+
+                    log_output = self.log("", log_output)
+
+                except Exception as e:
+                    log_output = self.log(f"  ⚠️ 화살표 포인터 처리 실패: {str(e)}", log_output)
+                    log_output = self.log("", log_output)
+
+            return script, keywords, keyword_overlays, highlight, arrow_pointers, log_output
 
         except Exception as e:
             log_output = self.log(f"❌ 대본 생성 실패: {str(e)}", log_output)
@@ -597,7 +678,7 @@ class GradioUI:
             log_output = self.log(f"⚠️  경고: 폴백 대본 사용 (PPT 원문)", log_output)
             log_output = self.log(f"→ {fallback_script[:50]}...", log_output)
             log_output = self.log("", log_output)
-            return fallback_script, [], [], None, log_output
+            return fallback_script, [], [], None, [], log_output
 
     def convert_ppt_to_video_router(
         self,
@@ -855,7 +936,7 @@ class GradioUI:
                 if hasattr(self, 'current_pdf_path'):
                     pdf_file_path = self.current_pdf_path
 
-                script, keywords, keyword_overlays, highlight, log_output = self.generate_script_with_thinking(
+                script, keywords, keyword_overlays, highlight, arrow_pointers, log_output = self.generate_script_with_thinking(
                     slide,
                     context_analysis,
                     i + 1,
@@ -876,7 +957,8 @@ class GradioUI:
                     "script": script,
                     "keywords": keywords,  # 기존 키워드 (호환성 유지)
                     "keyword_overlays": keyword_overlays,  # 새로운 키워드 오버레이
-                    "highlight": highlight  # 핵심 문구 하이라이트 (화면 중앙 표시)
+                    "highlight": highlight,  # 핵심 문구 하이라이트 (화면 중앙 표시)
+                    "arrow_pointers": arrow_pointers  # $$$ 화살표 포인터
                 })
 
                 yield log_output, None
