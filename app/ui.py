@@ -496,11 +496,17 @@ class GradioUI:
                         original_timing = kw['timing']
                         diff = abs(calculated_timing - original_timing)
 
+                        # TTS보다 마킹이 먼저 나오면 안됨 → 0.4초 딜레이 추가
+                        MARKING_DELAY = 0.4
+
                         # 차이가 2초 이상이면 자동 보정
                         if diff > 2.0:
-                            log_output = self.log(f"  - {kw['text']}: {original_timing:.1f}초 → {calculated_timing:.1f}초 (단어 {words_before}/{total_words})", log_output)
-                            kw['timing'] = calculated_timing
+                            adjusted_timing = calculated_timing + MARKING_DELAY
+                            log_output = self.log(f"  - {kw['text']}: {original_timing:.1f}초 → {adjusted_timing:.1f}초 (단어 {words_before}/{total_words}, +딜레이)", log_output)
+                            kw['timing'] = adjusted_timing
                         else:
+                            # 원래 타이밍에도 딜레이 추가
+                            kw['timing'] = kw['timing'] + MARKING_DELAY
                             log_output = self.log(f"  - {kw['text']} ({kw['timing']:.1f}초)", log_output)
                     else:
                         # 대본에서 찾지 못한 경우 원래 타이밍 유지
@@ -959,13 +965,13 @@ class GradioUI:
                             word_ratio = words_before / max(total_words, 1)
                             new_timing = word_ratio * actual_duration
 
-                            # 약간의 보정: 문장 시작 부분은 조금 앞으로
-                            if word_ratio < 0.3:
-                                new_timing = max(0.5, new_timing * 0.9)
+                            # TTS보다 마킹이 먼저 나오면 안됨 → 0.4초 딜레이 추가
+                            MARKING_DELAY = 0.4
+                            new_timing = new_timing + MARKING_DELAY
 
                             # 타이밍 업데이트
                             kw_overlay['timing'] = new_timing
-                            log_output = self.log(f"    - '{keyword_text}': {old_timing:.1f}초 → {new_timing:.1f}초 (단어 {words_before}/{total_words})", log_output)
+                            log_output = self.log(f"    - '{keyword_text}': {old_timing:.1f}초 → {new_timing:.1f}초 (단어 {words_before}/{total_words}, +딜레이)", log_output)
 
             if timing_adjusted:
                 # 재조정된 타이밍으로 scripts.json 업데이트
