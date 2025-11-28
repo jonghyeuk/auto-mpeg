@@ -578,7 +578,7 @@ class GradioUI:
                     log_output = self.log("", log_output)
                     keyword_overlays = []
 
-            return script, keywords, keyword_overlays, log_output
+            return script, keywords, keyword_overlays, highlight, log_output
 
         except Exception as e:
             log_output = self.log(f"❌ 대본 생성 실패: {str(e)}", log_output)
@@ -591,7 +591,7 @@ class GradioUI:
             log_output = self.log(f"⚠️  경고: 폴백 대본 사용 (PPT 원문)", log_output)
             log_output = self.log(f"→ {fallback_script[:50]}...", log_output)
             log_output = self.log("", log_output)
-            return fallback_script, [], [], log_output
+            return fallback_script, [], [], None, log_output
 
     def convert_ppt_to_video_router(
         self,
@@ -849,7 +849,7 @@ class GradioUI:
                 if hasattr(self, 'current_pdf_path'):
                     pdf_file_path = self.current_pdf_path
 
-                script, keywords, keyword_overlays, log_output = self.generate_script_with_thinking(
+                script, keywords, keyword_overlays, highlight, log_output = self.generate_script_with_thinking(
                     slide,
                     context_analysis,
                     i + 1,
