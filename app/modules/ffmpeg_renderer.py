@@ -136,13 +136,14 @@ class FFmpegRenderer:
                         timing = overlay_info.get("timing", 0)
                         keyword = overlay_info.get("keyword", "Unknown")
 
-                        # 애니메이션 타이밍
-                        fade_in_start = max(0, timing - 0.5)
-                        fade_in_end = timing
+                        # 애니메이션 타이밍 (TTS 싱크 개선: 마킹이 TTS보다 늦게 나타나도록)
+                        # 페이드인 시작을 타이밍 직전으로 (0.2초 전에 시작, TTS와 더 정확히 맞춤)
+                        fade_in_start = max(0, timing - 0.2)
+                        fade_in_end = timing + 0.1  # 빠르게 페이드인 완료
                         fade_out_start = timing + 2.0
                         fade_out_end = timing + 2.5
 
-                        print(f"    🎬 '{keyword}': {fade_in_start:.1f}초 페이드인 → {timing:.1f}초 완전표시 → {fade_out_start:.1f}초 유지 → {fade_out_end:.1f}초 페이드아웃")
+                        print(f"    🎬 '{keyword}': {fade_in_start:.1f}초 페이드인 → {fade_in_end:.1f}초 완전표시 → {fade_out_start:.1f}초 유지 → {fade_out_end:.1f}초 페이드아웃")
 
                         # 오버레이 입력 인덱스 (input 0은 base 이미지, input 1부터 오버레이)
                         overlay_idx = i + 1

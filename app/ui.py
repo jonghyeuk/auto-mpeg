@@ -260,13 +260,22 @@ class GradioUI:
             client = Anthropic(api_key=config.ANTHROPIC_API_KEY)
 
             # 전체 맥락 분석 프롬프트
+            # Python 3.12+ 호환성: f-string 내부에 백슬래시 사용 불가
+            newline = '\n'
+            titles_str = newline.join(f'{i+1}. {titles[i]}' for i in range(len(titles)))
+            slides_details = []
+            for s in slides[:5]:
+                slide_body = s.get("body", "")[:200]
+                slides_details.append(f'슬라이드 {s["index"]}: {s.get("title", "")}{newline}{slide_body}...')
+            slides_str = newline.join(slides_details)
+
             context_prompt = f"""다음은 프레젠테이션의 모든 슬라이드입니다.
 
 슬라이드 제목들:
-{chr(10).join(f'{i+1}. {titles[i]}' for i in range(len(titles)))}
+{titles_str}
 
 슬라이드 상세 내용:
-{chr(10).join(f'슬라이드 {s["index"]}: {s.get("title", "")}\n{s.get("body", "")[:200]}...' for s in slides[:5])}
+{slides_str}
 
 이 프레젠테이션의:
 1. 주제와 목적을 한 문장으로 요약해주세요
@@ -528,8 +537,8 @@ class GradioUI:
                         original_timing = kw['timing']
                         diff = abs(calculated_timing - original_timing)
 
-                        # TTS보다 마킹이 먼저 나오면 안됨 → 0.4초 딜레이 추가
-                        MARKING_DELAY = 0.4
+                        # TTS보다 마킹이 먼저 나오면 안됨 → 0.7초 딜레이 추가 (더 보수적)
+                        MARKING_DELAY = 0.7
 
                         # 차이가 2초 이상이면 자동 보정
                         if diff > 2.0:
@@ -651,7 +660,7 @@ class GradioUI:
                                 words_before = len(text_before.split())
                                 total_words = len(script.split())
                                 word_ratio = words_before / max(total_words, 1)
-                                timing = word_ratio * estimated_duration + 0.4  # 딜레이 추가
+                                timing = word_ratio * estimated_duration + 0.7  # 딜레이 추가 (더 보수적)
 
                                 arrow_pointers.append({
                                     "marker": arrow_marker,
@@ -1054,8 +1063,8 @@ class GradioUI:
                             word_ratio = words_before / max(total_words, 1)
                             new_timing = word_ratio * actual_duration
 
-                            # TTS보다 마킹이 먼저 나오면 안됨 → 0.4초 딜레이 추가
-                            MARKING_DELAY = 0.4
+                            # TTS보다 마킹이 먼저 나오면 안됨 → 0.7초 딜레이 추가 (더 보수적)
+                            MARKING_DELAY = 0.7
                             new_timing = new_timing + MARKING_DELAY
 
                             # 타이밍 업데이트
