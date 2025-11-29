@@ -9,6 +9,8 @@ import shutil
 import os
 import json
 import subprocess
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pptx import Presentation
 
 # 프로젝트 루트를 Python path에 추가
@@ -308,7 +310,8 @@ class GradioUI:
             return "", log_output
 
     def generate_script_with_thinking(self, slide, context, slide_num, total_slides, target_duration, progress, log_output,
-                                     custom_request="", slide_image_path=None, pdf_path=None, page_num=None, enable_keyword_marking=True, keyword_mark_style="circle"):
+                                     custom_request="", slide_image_path=None, pdf_path=None, page_num=None, enable_keyword_marking=True, keyword_mark_style="circle",
+                                     keyword_marker=None):
         """
         개별 슬라이드 대본 생성 (사고 과정 포함)
 
@@ -318,6 +321,7 @@ class GradioUI:
             pdf_path: PDF 파일 경로 (PDF인 경우)
             page_num: 페이지 번호 (0부터 시작)
             enable_keyword_marking: 키워드 마킹 활성화 여부
+            keyword_marker: KeywordMarker 인스턴스 (재사용용, None이면 새로 생성)
         """
         from anthropic import Anthropic
 
@@ -516,41 +520,44 @@ class GradioUI:
             if keywords:
                 log_output = self.log("🔑 핵심 키워드 (텍스트 애니메이션):", log_output)
 
-                # 타이밍 자동 계산: 대본에서 키워드가 실제로 나오는 위치 기반 (단어 기준)
-                total_words = len(script.split())
-                estimated_duration = total_words * 0.4  # 단어당 약 0.4초 (평균 한국어 TTS)
+                # 타이밍 자동 계산: 대본에서 키워드가 실제로 나오는 위치 기반 (글자 수 기준 - 한국어에 더 정확)
+                total_chars = len(script)
+                # 한국어 TTS 평균 속도: 초당 약 4-5글자 (여유있게 4글자로 계산)
+                estimated_duration = total_chars / 4.0
+
+                # TTS보다 마킹이 먼저 나오면 안됨 → 딜레이 추가
+                # 마킹이 TTS 발화 직후에 나타나도록 (TTS 뒤 0.3~0.5초)
+                MARKING_DELAY = 0.5
+
                 for kw in keywords:
                     # 대본에서 키워드 위치 찾기
                     keyword_text = kw['text'].strip()
                     keyword_pos = script.find(keyword_text)
 
                     if keyword_pos >= 0:
-                        # 단어 기반 타이밍 계산 (더 정확함)
-                        text_before_keyword = script[:keyword_pos]
-                        words_before = len(text_before_keyword.split())
+                        # 글자 수 기반 타이밍 계산 (한국어에 더 정확)
+                        chars_before = keyword_pos
 
-                        # 단어 비율로 타이밍 계산
-                        word_ratio = words_before / max(total_words, 1)
-                        calculated_timing = word_ratio * estimated_duration
+                        # 글자 비율로 타이밍 계산
+                        char_ratio = chars_before / max(total_chars, 1)
+                        calculated_timing = char_ratio * estimated_duration
 
-                        # LLM이 제공한 타이밍과 비교
+                        # 딜레이 추가: TTS가 해당 단어를 말한 직후 마킹 표시
+                        adjusted_timing = calculated_timing + MARKING_DELAY
+
+                        # LLM이 제공한 타이밍과 비교 (참고용)
                         original_timing = kw['timing']
-                        diff = abs(calculated_timing - original_timing)
+                        diff = abs(adjusted_timing - original_timing)
 
-                        # TTS보다 마킹이 먼저 나오면 안됨 → 0.7초 딜레이 추가 (더 보수적)
-                        MARKING_DELAY = 0.7
-
-                        # 차이가 2초 이상이면 자동 보정
-                        if diff > 2.0:
-                            adjusted_timing = calculated_timing + MARKING_DELAY
-                            log_output = self.log(f"  - {kw['text']}: {original_timing:.1f}초 → {adjusted_timing:.1f}초 (단어 {words_before}/{total_words}, +딜레이)", log_output)
-                            kw['timing'] = adjusted_timing
+                        if diff > 1.0:
+                            log_output = self.log(f"  - {kw['text']}: {original_timing:.1f}초 → {adjusted_timing:.1f}초 (글자 {chars_before}/{total_chars}, 보정됨)", log_output)
                         else:
-                            # 원래 타이밍에도 딜레이 추가
-                            kw['timing'] = kw['timing'] + MARKING_DELAY
-                            log_output = self.log(f"  - {kw['text']} ({kw['timing']:.1f}초)", log_output)
+                            log_output = self.log(f"  - {kw['text']} @ {adjusted_timing:.1f}초 (글자 {chars_before}/{total_chars})", log_output)
+
+                        kw['timing'] = adjusted_timing
                     else:
-                        # 대본에서 찾지 못한 경우 원래 타이밍 유지
+                        # 대본에서 찾지 못한 경우 원래 타이밍에 딜레이 추가
+                        kw['timing'] = kw['timing'] + MARKING_DELAY
                         log_output = self.log(f"  - {kw['text']} ({kw['timing']:.1f}초) ⚠️ 대본에서 미발견", log_output)
 
                 log_output = self.log("", log_output)
@@ -593,12 +600,16 @@ class GradioUI:
 
             # 키워드 마킹 수행
             keyword_overlays = []
+
+            # KeywordMarker 초기화 - 전달받은 인스턴스 재사용 또는 새로 생성
+            if keyword_marker is None:
+                marker = KeywordMarker(use_ocr=True)
+            else:
+                marker = keyword_marker
+
             if enable_keyword_marking and keywords and slide_image_path:
                 try:
                     log_output = self.log("🎯 키워드 마킹 시작:", log_output)
-
-                    # KeywordMarker 초기화 (OCR 사용)
-                    marker = KeywordMarker(use_ocr=True)
 
                     # 마킹 결과 저장 디렉토리
                     overlay_dir = config.META_DIR / f"overlays_slide_{slide_num:03d}"
@@ -632,9 +643,7 @@ class GradioUI:
                 try:
                     log_output = self.log("🏹 화살표 포인터 처리:", log_output)
 
-                    # KeywordMarker를 사용하여 $숫자 위치 찾기
-                    marker = KeywordMarker(use_ocr=True)
-
+                    # 위에서 생성된 marker 인스턴스 재사용 (KeywordMarker)
                     for arrow_info in parsed_arrows:
                         arrow_marker = arrow_info["marker"]  # $1, $2, ...
                         arrow_keyword = arrow_info["keyword"]
@@ -653,14 +662,16 @@ class GradioUI:
                             marker_x = marker_pos.get("x", 0)
                             marker_y = marker_pos.get("y", 0)
 
-                            # 대본에서 키워드 위치로 타이밍 계산
+                            # 대본에서 키워드 위치로 타이밍 계산 (글자 수 기반)
                             keyword_pos = script.lower().find(arrow_keyword.lower())
                             if keyword_pos >= 0:
-                                text_before = script[:keyword_pos]
-                                words_before = len(text_before.split())
-                                total_words = len(script.split())
-                                word_ratio = words_before / max(total_words, 1)
-                                timing = word_ratio * estimated_duration + 0.7  # 딜레이 추가 (더 보수적)
+                                total_chars = len(script)
+                                chars_before = keyword_pos
+                                # 글자 비율로 타이밍 계산 (한국어 TTS: 초당 약 4글자)
+                                char_ratio = chars_before / max(total_chars, 1)
+                                arrow_estimated_duration = total_chars / 4.0
+                                # 딜레이 추가: TTS가 해당 단어를 말한 직후 화살표 표시
+                                timing = char_ratio * arrow_estimated_duration + 0.5
 
                                 arrow_pointers.append({
                                     "marker": arrow_marker,
@@ -940,44 +951,93 @@ class GradioUI:
 
             scripts_data = []
 
-            for i, slide in enumerate(slides):
-                progress_pct = 0.2 + (0.4 * (i + 1) / len(slides))
-                progress(progress_pct, desc=f"대본 생성 중... ({i+1}/{len(slides)})")
+            # PDF 파일 정보 (PDF인 경우)
+            pdf_file_path = None
+            if hasattr(self, 'current_pdf_path'):
+                pdf_file_path = self.current_pdf_path
 
-                # 슬라이드 이미지 경로 (키워드 마킹용)
+            # 병렬 처리를 위한 스레드 안전 변수들
+            results_lock = threading.Lock()
+            completed_count = [0]  # 리스트로 감싸서 클로저에서 수정 가능하게
+            all_results = {}  # {slide_index: result_dict}
+            all_logs = {}  # {slide_index: log_string}
+
+            def process_slide(slide_info):
+                """개별 슬라이드 처리 함수 (스레드에서 실행)"""
+                i, slide = slide_info
                 slide_image_path = config.SLIDES_IMG_DIR / f"slide_{slide['index']:03d}.png"
 
-                # PDF 파일 정보 (PDF인 경우)
-                pdf_file_path = None
-                if hasattr(self, 'current_pdf_path'):
-                    pdf_file_path = self.current_pdf_path
+                # 각 스레드가 자체 KeywordMarker 인스턴스 생성 (스레드 안전)
+                thread_marker = KeywordMarker(use_ocr=True)
 
-                script, keywords, keyword_overlays, highlight, arrow_pointers, log_output = self.generate_script_with_thinking(
+                # 스레드별 독립 로그
+                thread_log = ""
+
+                script, keywords, keyword_overlays, highlight, arrow_pointers, thread_log = self.generate_script_with_thinking(
                     slide,
                     context_analysis,
                     i + 1,
                     len(slides),
-                    slides_per_duration,  # 각 슬라이드 목표 시간
-                    progress,
-                    log_output,
+                    slides_per_duration,
+                    progress,  # progress는 메인 스레드에서만 업데이트됨
+                    thread_log,
                     custom_request=custom_request,
                     slide_image_path=slide_image_path if slide_image_path.exists() else None,
                     pdf_path=pdf_file_path,
-                    page_num=i,  # 0부터 시작
+                    page_num=i,
                     enable_keyword_marking=enable_keyword_marking,
-                    keyword_mark_style=keyword_mark_style
+                    keyword_mark_style=keyword_mark_style,
+                    keyword_marker=thread_marker
                 )
 
-                scripts_data.append({
+                result = {
                     "index": slide["index"],
                     "script": script,
-                    "keywords": keywords,  # 기존 키워드 (호환성 유지)
-                    "keyword_overlays": keyword_overlays,  # 새로운 키워드 오버레이
-                    "highlight": highlight,  # 핵심 문구 하이라이트 (화면 중앙 표시)
-                    "arrow_pointers": arrow_pointers  # $$$ 화살표 포인터
-                })
+                    "keywords": keywords,
+                    "keyword_overlays": keyword_overlays,
+                    "highlight": highlight,
+                    "arrow_pointers": arrow_pointers
+                }
 
-                yield log_output, None
+                # 스레드 안전하게 결과 저장
+                with results_lock:
+                    all_results[i] = result
+                    all_logs[i] = thread_log
+                    completed_count[0] += 1
+
+                return i, result
+
+            # 병렬 처리 (최대 4개 워커)
+            max_workers = min(4, len(slides))
+            log_output = self.log(f"⚡ 병렬 처리 시작 (워커: {max_workers}개, 슬라이드: {len(slides)}개)", log_output)
+            yield log_output, None
+
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                # 모든 슬라이드 처리 작업 제출
+                futures = {
+                    executor.submit(process_slide, (i, slide)): i
+                    for i, slide in enumerate(slides)
+                }
+
+                # 완료되는 순서대로 진행상황 업데이트
+                for future in as_completed(futures):
+                    slide_idx, result = future.result()
+                    progress_pct = 0.2 + (0.4 * completed_count[0] / len(slides))
+                    progress(progress_pct, desc=f"대본 생성 중... ({completed_count[0]}/{len(slides)})")
+                    log_output = self.log(f"  ✓ 슬라이드 {slide_idx + 1} 완료", log_output)
+                    yield log_output, None
+
+            # 결과를 슬라이드 순서대로 정렬하여 scripts_data에 추가
+            for i in range(len(slides)):
+                scripts_data.append(all_results[i])
+
+            # 모든 로그 병합 (슬라이드 순서대로)
+            log_output = self.log("", log_output)
+            log_output = self.log("📋 상세 처리 로그:", log_output)
+            for i in range(len(slides)):
+                if i in all_logs and all_logs[i]:
+                    log_output = self.log(all_logs[i], log_output)
+            yield log_output, None
 
             # 대본 저장
             with open(scripts_json, 'w', encoding='utf-8') as f:
@@ -1034,15 +1094,16 @@ class GradioUI:
                 if not keyword_overlays:
                     continue
 
-                # 예상 길이 (글자 수 기반)
-                estimated_duration = len(script_text) / 3.5
+                # 예상 길이 (글자 수 기반: 초당 4글자)
+                estimated_duration = len(script_text) / 4.0
 
-                # 실제 길이와 예상 길이 비교
-                if abs(actual_duration - estimated_duration) > 2.0:  # 2초 이상 차이
+                # 실제 TTS 길이와 예상 길이 비교
+                # 항상 실제 TTS 길이를 기준으로 재계산 (더 정확)
+                if abs(actual_duration - estimated_duration) > 1.0:  # 1초 이상 차이
                     timing_adjusted = True
                     log_output = self.log(f"  슬라이드 {i+1}: 예상 {estimated_duration:.1f}초 → 실제 {actual_duration:.1f}초", log_output)
 
-                    # 키워드 타이밍 재계산
+                    # 키워드 타이밍 재계산 (실제 TTS 길이 기반)
                     for kw_overlay in keyword_overlays:
                         if not kw_overlay.get('found'):
                             continue
@@ -1050,26 +1111,24 @@ class GradioUI:
                         keyword_text = kw_overlay['keyword']
                         old_timing = kw_overlay['timing']
 
-                        # 대본에서 키워드 위치 찾기 (단어 기반으로 계산)
+                        # 대본에서 키워드 위치 찾기 (글자 수 기반)
                         keyword_pos = script_text.find(keyword_text)
                         if keyword_pos >= 0:
-                            # 단어 기반 타이밍 계산 (더 정확함)
-                            # 키워드 앞에 있는 단어 수를 세기
-                            text_before_keyword = script_text[:keyword_pos]
-                            words_before = len(text_before_keyword.split())
-                            total_words = len(script_text.split())
+                            # 글자 수 기반 타이밍 계산 (실제 TTS 길이 사용)
+                            total_chars = len(script_text)
+                            chars_before = keyword_pos
 
-                            # 단어 비율로 타이밍 계산
-                            word_ratio = words_before / max(total_words, 1)
-                            new_timing = word_ratio * actual_duration
+                            # 글자 비율로 타이밍 계산
+                            char_ratio = chars_before / max(total_chars, 1)
+                            new_timing = char_ratio * actual_duration
 
-                            # TTS보다 마킹이 먼저 나오면 안됨 → 0.7초 딜레이 추가 (더 보수적)
-                            MARKING_DELAY = 0.7
+                            # TTS가 해당 단어를 말한 직후 마킹 표시 (0.5초 딜레이)
+                            MARKING_DELAY = 0.5
                             new_timing = new_timing + MARKING_DELAY
 
                             # 타이밍 업데이트
                             kw_overlay['timing'] = new_timing
-                            log_output = self.log(f"    - '{keyword_text}': {old_timing:.1f}초 → {new_timing:.1f}초 (단어 {words_before}/{total_words}, +딜레이)", log_output)
+                            log_output = self.log(f"    - '{keyword_text}': {old_timing:.1f}초 → {new_timing:.1f}초 (글자 {chars_before}/{total_chars})", log_output)
 
             if timing_adjusted:
                 # 재조정된 타이밍으로 scripts.json 업데이트

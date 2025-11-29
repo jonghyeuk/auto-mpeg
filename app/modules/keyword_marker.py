@@ -609,65 +609,109 @@ class KeywordMarker:
                 # $숫자 패턴 특별 처리 (예: "$1", "$2")
                 # OCR이 "$"를 "S", "5", "s" 등으로 잘못 인식할 수 있음
                 is_dollar_pattern = search_text.startswith("$") and len(search_text) >= 2
+
                 if is_dollar_pattern:
                     # 숫자 부분 추출 (예: "$1" -> "1", "$12" -> "12")
                     number_part = search_text[1:]
-                    # 가능한 OCR 변형 패턴들
-                    dollar_variants = [
-                        f"${number_part}",      # 원본
-                        f"s{number_part}",      # $ -> s
-                        f"S{number_part}",      # $ -> S
-                        f"5{number_part}",      # $ -> 5
-                        number_part,            # $ 누락
-                        f"${number_part}.",     # 뒤에 점 추가
-                        f"${number_part},",     # 뒤에 쉼표 추가
+
+                    # 정확한 매칭을 위한 정규식 패턴들
+                    # $3을 찾을 때 "3", "$3", "S3", "s3", "53" 등 정확히 매칭
+                    # 하지만 "13", "23", "30", "3단계" 등은 제외
+                    exact_patterns = [
+                        rf'^[\$sS5]?{re.escape(number_part)}$',  # 정확히 일치 (예: "$3", "S3", "3")
+                        rf'^[\$sS5]{re.escape(number_part)}[.,:]?$',  # 뒤에 구두점 (예: "$3.", "$3,")
                     ]
-                    print(f"    🔍 화살표 마커 '{search_text}' 검색 중... (변형 패턴: {dollar_variants})")
 
-                for (bbox, text, confidence) in ocr_results:
-                    if confidence < 0.2:  # 화살표 마커는 신뢰도 낮아도 허용
-                        continue
+                    print(f"    🔍 화살표 마커 '{search_text}' 검색 중... (정확한 매칭)")
 
-                    text_normalized = text.lower().strip()
-                    text_clean = text.strip()
+                    for (bbox, text, confidence) in ocr_results:
+                        if confidence < 0.2:
+                            continue
 
-                    # 매칭 여부
-                    matched = False
+                        text_clean = text.strip()
 
-                    # $숫자 패턴 특별 처리
-                    if is_dollar_pattern:
-                        for variant in dollar_variants:
-                            variant_lower = variant.lower()
-                            if variant_lower == text_normalized or variant_lower in text_normalized:
-                                matched = True
-                                print(f"    ✓ 화살표 마커 매칭: '{search_text}' -> '{text_clean}' (변형: {variant})")
+                        # 정확한 패턴 매칭
+                        for pattern in exact_patterns:
+                            if re.match(pattern, text_clean, re.IGNORECASE):
+                                x0 = int(min(point[0] for point in bbox))
+                                y0 = int(min(point[1] for point in bbox))
+                                x1 = int(max(point[0] for point in bbox))
+                                y1 = int(max(point[1] for point in bbox))
+
+                                center_x = (x0 + x1) // 2
+                                center_y = (y0 + y1) // 2
+
+                                results.append({
+                                    "x": center_x,
+                                    "y": center_y,
+                                    "bbox": (x0, y0, x1, y1),
+                                    "text": text_clean,
+                                    "confidence": confidence
+                                })
+                                print(f"    ✓ 화살표 마커 정확 매칭: '{search_text}' -> '{text_clean}' (신뢰도: {confidence:.2f})")
                                 break
-                    else:
-                        # 일반 텍스트 매칭 (정확히 일치하거나 포함)
+
+                    # 정확한 매칭이 없으면 부분 매칭 시도 (더 엄격하게)
+                    if not results:
+                        print(f"    ⚠️ 정확한 매칭 없음, 부분 매칭 시도...")
+                        for (bbox, text, confidence) in ocr_results:
+                            if confidence < 0.3:  # 부분 매칭은 더 높은 신뢰도 요구
+                                continue
+
+                            text_clean = text.strip()
+                            # 텍스트가 짧고 (5자 이하) 숫자 부분이 정확히 포함되어 있으면 매칭
+                            if len(text_clean) <= 5:
+                                # 숫자가 정확히 일치하는지 확인 (앞뒤에 다른 숫자 없이)
+                                if re.search(rf'(?<![0-9]){re.escape(number_part)}(?![0-9])', text_clean):
+                                    x0 = int(min(point[0] for point in bbox))
+                                    y0 = int(min(point[1] for point in bbox))
+                                    x1 = int(max(point[0] for point in bbox))
+                                    y1 = int(max(point[1] for point in bbox))
+
+                                    center_x = (x0 + x1) // 2
+                                    center_y = (y0 + y1) // 2
+
+                                    results.append({
+                                        "x": center_x,
+                                        "y": center_y,
+                                        "bbox": (x0, y0, x1, y1),
+                                        "text": text_clean,
+                                        "confidence": confidence
+                                    })
+                                    print(f"    ✓ 화살표 마커 부분 매칭: '{search_text}' -> '{text_clean}' (신뢰도: {confidence:.2f})")
+                else:
+                    # 일반 텍스트 매칭
+                    for (bbox, text, confidence) in ocr_results:
+                        if confidence < 0.3:
+                            continue
+
+                        text_normalized = text.lower().strip()
+
                         if search_normalized == text_normalized or search_normalized in text_normalized:
-                            matched = True
+                            x0 = int(min(point[0] for point in bbox))
+                            y0 = int(min(point[1] for point in bbox))
+                            x1 = int(max(point[0] for point in bbox))
+                            y1 = int(max(point[1] for point in bbox))
 
-                    if matched:
-                        # bbox는 [[x0, y0], [x1, y0], [x1, y1], [x0, y1]] 형식
-                        x0 = int(min(point[0] for point in bbox))
-                        y0 = int(min(point[1] for point in bbox))
-                        x1 = int(max(point[0] for point in bbox))
-                        y1 = int(max(point[1] for point in bbox))
+                            center_x = (x0 + x1) // 2
+                            center_y = (y0 + y1) // 2
 
-                        # 중심점 계산
-                        center_x = (x0 + x1) // 2
-                        center_y = (y0 + y1) // 2
-
-                        results.append({
-                            "x": center_x,
-                            "y": center_y,
-                            "bbox": (x0, y0, x1, y1),
-                            "text": text,
-                            "confidence": confidence
-                        })
+                            results.append({
+                                "x": center_x,
+                                "y": center_y,
+                                "bbox": (x0, y0, x1, y1),
+                                "text": text,
+                                "confidence": confidence
+                            })
 
             except Exception as e:
                 print(f"⚠️  텍스트 위치 찾기 실패: {e}")
+
+        # 결과가 여러 개면 신뢰도가 가장 높은 것 선택
+        if len(results) > 1:
+            results.sort(key=lambda x: x["confidence"], reverse=True)
+            print(f"    📊 {len(results)}개 매칭 중 신뢰도 최고: '{results[0]['text']}' (신뢰도: {results[0]['confidence']:.2f})")
+            results = [results[0]]  # 가장 높은 신뢰도 것만 반환
 
         # $숫자 패턴 결과 로깅 (블록 밖에서 변수 확인)
         is_dollar_pattern_check = search_text.startswith("$") and len(search_text) >= 2
