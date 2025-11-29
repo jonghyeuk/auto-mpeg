@@ -9,6 +9,8 @@ import shutil
 import os
 import json
 import subprocess
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pptx import Presentation
 
 # 프로젝트 루트를 Python path에 추가
@@ -308,7 +310,8 @@ class GradioUI:
             return "", log_output
 
     def generate_script_with_thinking(self, slide, context, slide_num, total_slides, target_duration, progress, log_output,
-                                     custom_request="", slide_image_path=None, pdf_path=None, page_num=None, enable_keyword_marking=True, keyword_mark_style="circle"):
+                                     custom_request="", slide_image_path=None, pdf_path=None, page_num=None, enable_keyword_marking=True, keyword_mark_style="circle",
+                                     keyword_marker=None):
         """
         개별 슬라이드 대본 생성 (사고 과정 포함)
 
@@ -318,6 +321,7 @@ class GradioUI:
             pdf_path: PDF 파일 경로 (PDF인 경우)
             page_num: 페이지 번호 (0부터 시작)
             enable_keyword_marking: 키워드 마킹 활성화 여부
+            keyword_marker: KeywordMarker 인스턴스 (재사용용, None이면 새로 생성)
         """
         from anthropic import Anthropic
 
@@ -596,12 +600,16 @@ class GradioUI:
 
             # 키워드 마킹 수행
             keyword_overlays = []
+
+            # KeywordMarker 초기화 - 전달받은 인스턴스 재사용 또는 새로 생성
+            if keyword_marker is None:
+                marker = KeywordMarker(use_ocr=True)
+            else:
+                marker = keyword_marker
+
             if enable_keyword_marking and keywords and slide_image_path:
                 try:
                     log_output = self.log("🎯 키워드 마킹 시작:", log_output)
-
-                    # KeywordMarker 초기화 (OCR 사용)
-                    marker = KeywordMarker(use_ocr=True)
 
                     # 마킹 결과 저장 디렉토리
                     overlay_dir = config.META_DIR / f"overlays_slide_{slide_num:03d}"
@@ -635,9 +643,7 @@ class GradioUI:
                 try:
                     log_output = self.log("🏹 화살표 포인터 처리:", log_output)
 
-                    # KeywordMarker를 사용하여 $숫자 위치 찾기
-                    marker = KeywordMarker(use_ocr=True)
-
+                    # 위에서 생성된 marker 인스턴스 재사용 (KeywordMarker)
                     for arrow_info in parsed_arrows:
                         arrow_marker = arrow_info["marker"]  # $1, $2, ...
                         arrow_keyword = arrow_info["keyword"]
@@ -945,44 +951,93 @@ class GradioUI:
 
             scripts_data = []
 
-            for i, slide in enumerate(slides):
-                progress_pct = 0.2 + (0.4 * (i + 1) / len(slides))
-                progress(progress_pct, desc=f"대본 생성 중... ({i+1}/{len(slides)})")
+            # PDF 파일 정보 (PDF인 경우)
+            pdf_file_path = None
+            if hasattr(self, 'current_pdf_path'):
+                pdf_file_path = self.current_pdf_path
 
-                # 슬라이드 이미지 경로 (키워드 마킹용)
+            # 병렬 처리를 위한 스레드 안전 변수들
+            results_lock = threading.Lock()
+            completed_count = [0]  # 리스트로 감싸서 클로저에서 수정 가능하게
+            all_results = {}  # {slide_index: result_dict}
+            all_logs = {}  # {slide_index: log_string}
+
+            def process_slide(slide_info):
+                """개별 슬라이드 처리 함수 (스레드에서 실행)"""
+                i, slide = slide_info
                 slide_image_path = config.SLIDES_IMG_DIR / f"slide_{slide['index']:03d}.png"
 
-                # PDF 파일 정보 (PDF인 경우)
-                pdf_file_path = None
-                if hasattr(self, 'current_pdf_path'):
-                    pdf_file_path = self.current_pdf_path
+                # 각 스레드가 자체 KeywordMarker 인스턴스 생성 (스레드 안전)
+                thread_marker = KeywordMarker(use_ocr=True)
 
-                script, keywords, keyword_overlays, highlight, arrow_pointers, log_output = self.generate_script_with_thinking(
+                # 스레드별 독립 로그
+                thread_log = ""
+
+                script, keywords, keyword_overlays, highlight, arrow_pointers, thread_log = self.generate_script_with_thinking(
                     slide,
                     context_analysis,
                     i + 1,
                     len(slides),
-                    slides_per_duration,  # 각 슬라이드 목표 시간
-                    progress,
-                    log_output,
+                    slides_per_duration,
+                    progress,  # progress는 메인 스레드에서만 업데이트됨
+                    thread_log,
                     custom_request=custom_request,
                     slide_image_path=slide_image_path if slide_image_path.exists() else None,
                     pdf_path=pdf_file_path,
-                    page_num=i,  # 0부터 시작
+                    page_num=i,
                     enable_keyword_marking=enable_keyword_marking,
-                    keyword_mark_style=keyword_mark_style
+                    keyword_mark_style=keyword_mark_style,
+                    keyword_marker=thread_marker
                 )
 
-                scripts_data.append({
+                result = {
                     "index": slide["index"],
                     "script": script,
-                    "keywords": keywords,  # 기존 키워드 (호환성 유지)
-                    "keyword_overlays": keyword_overlays,  # 새로운 키워드 오버레이
-                    "highlight": highlight,  # 핵심 문구 하이라이트 (화면 중앙 표시)
-                    "arrow_pointers": arrow_pointers  # $$$ 화살표 포인터
-                })
+                    "keywords": keywords,
+                    "keyword_overlays": keyword_overlays,
+                    "highlight": highlight,
+                    "arrow_pointers": arrow_pointers
+                }
 
-                yield log_output, None
+                # 스레드 안전하게 결과 저장
+                with results_lock:
+                    all_results[i] = result
+                    all_logs[i] = thread_log
+                    completed_count[0] += 1
+
+                return i, result
+
+            # 병렬 처리 (최대 4개 워커)
+            max_workers = min(4, len(slides))
+            log_output = self.log(f"⚡ 병렬 처리 시작 (워커: {max_workers}개, 슬라이드: {len(slides)}개)", log_output)
+            yield log_output, None
+
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                # 모든 슬라이드 처리 작업 제출
+                futures = {
+                    executor.submit(process_slide, (i, slide)): i
+                    for i, slide in enumerate(slides)
+                }
+
+                # 완료되는 순서대로 진행상황 업데이트
+                for future in as_completed(futures):
+                    slide_idx, result = future.result()
+                    progress_pct = 0.2 + (0.4 * completed_count[0] / len(slides))
+                    progress(progress_pct, desc=f"대본 생성 중... ({completed_count[0]}/{len(slides)})")
+                    log_output = self.log(f"  ✓ 슬라이드 {slide_idx + 1} 완료", log_output)
+                    yield log_output, None
+
+            # 결과를 슬라이드 순서대로 정렬하여 scripts_data에 추가
+            for i in range(len(slides)):
+                scripts_data.append(all_results[i])
+
+            # 모든 로그 병합 (슬라이드 순서대로)
+            log_output = self.log("", log_output)
+            log_output = self.log("📋 상세 처리 로그:", log_output)
+            for i in range(len(slides)):
+                if i in all_logs and all_logs[i]:
+                    log_output = self.log(all_logs[i], log_output)
+            yield log_output, None
 
             # 대본 저장
             with open(scripts_json, 'w', encoding='utf-8') as f:
