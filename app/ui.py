@@ -661,6 +661,7 @@ class GradioUI:
                             marker_pos = marker_results[0]
                             marker_x = marker_pos.get("x", 0)
                             marker_y = marker_pos.get("y", 0)
+                            marker_bbox = marker_pos.get("bbox", None)  # (x0, y0, x1, y1)
 
                             # 대본에서 키워드 위치로 타이밍 계산 (글자 수 기반)
                             keyword_pos = script.lower().find(arrow_keyword.lower())
@@ -678,7 +679,8 @@ class GradioUI:
                                     "keyword": arrow_keyword,
                                     "target_x": marker_x,
                                     "target_y": marker_y,
-                                    "timing": timing
+                                    "timing": timing,
+                                    "marker_bbox": marker_bbox  # 마커 제거용 bbox
                                 })
                                 log_output = self.log(f"  ✓ {arrow_marker} '{arrow_keyword}' → 화살표 @{timing:.1f}초 (위치: {marker_x}, {marker_y})", log_output)
                             else:
@@ -1195,6 +1197,38 @@ class GradioUI:
             log_output = self.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", log_output)
             log_output = self.log("", log_output)
             yield log_output, None
+
+            # 화살표 마커($1, $2 등) 영역을 슬라이드 이미지에서 제거
+            # (영상에서 마커가 보이지 않도록)
+            marker_removal_count = 0
+            for script_item in scripts_data:
+                arrow_pointers = script_item.get("arrow_pointers", [])
+                if arrow_pointers:
+                    slide_idx = script_item.get("index", 0)
+                    slide_path = config.SLIDES_IMG_DIR / f"slide_{slide_idx:03d}.png"
+
+                    if slide_path.exists():
+                        bboxes = []
+                        for arrow in arrow_pointers:
+                            bbox = arrow.get("marker_bbox")
+                            if bbox:
+                                bboxes.append(bbox)
+
+                        if bboxes:
+                            # KeywordMarker를 사용하여 마커 제거 (인페인팅)
+                            temp_marker = KeywordMarker(use_ocr=False)
+                            temp_marker.remove_markers_from_image(
+                                str(slide_path),
+                                bboxes,
+                                output_path=str(slide_path),  # 원본 덮어쓰기
+                                method="inpaint"
+                            )
+                            marker_removal_count += len(bboxes)
+
+            if marker_removal_count > 0:
+                log_output = self.log(f"🧹 화살표 마커 {marker_removal_count}개 제거 완료 (영상에서 숨김)", log_output)
+                log_output = self.log("", log_output)
+                yield log_output, None
 
             # 영상 품질 매핑 (CRF: 낮을수록 고품질)
             quality_map = {"high": 18, "medium": 23, "low": 28}
