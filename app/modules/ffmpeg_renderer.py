@@ -404,7 +404,9 @@ class FFmpegRenderer:
 
             # filter_complex 구성
             filter_parts = []
-            prev_label = "[0:v]"
+
+            # 비디오 xfade 필터
+            prev_video_label = "[0:v]"
             offset = 0.0
 
             for i in range(len(clip_paths) - 1):
@@ -419,13 +421,22 @@ class FFmpegRenderer:
 
                 # xfade 필터 추가
                 filter_parts.append(
-                    f"{prev_label}{next_input}xfade=transition={xfade_effect}:duration={duration}:offset={offset:.2f}{curr_label}"
+                    f"{prev_video_label}{next_input}xfade=transition={xfade_effect}:duration={duration}:offset={offset:.2f}{curr_label}"
                 )
-                prev_label = curr_label
+                prev_video_label = curr_label
 
-            # 오디오 연결
-            audio_inputs = "".join(f"[{i}:a]" for i in range(len(clip_paths)))
-            filter_parts.append(f"{audio_inputs}concat=n={len(clip_paths)}:v=0:a=1[outa]")
+            # 오디오 acrossfade 필터 (비디오와 동일한 타임라인 유지)
+            prev_audio_label = "[0:a]"
+
+            for i in range(len(clip_paths) - 1):
+                curr_label = f"[a{i}]" if i < len(clip_paths) - 2 else "[outa]"
+                next_input = f"[{i+1}:a]"
+
+                # acrossfade: 오디오도 동일한 duration으로 crossfade
+                filter_parts.append(
+                    f"{prev_audio_label}{next_input}acrossfade=d={duration}:c1=tri:c2=tri{curr_label}"
+                )
+                prev_audio_label = curr_label
 
             filter_complex = ";".join(filter_parts)
 

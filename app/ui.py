@@ -1157,16 +1157,43 @@ class GradioUI:
                     subtitle_file = config.META_DIR / f"{output_name}.srt"
 
                     # audio_meta에서 스크립트와 타이밍 정보 추출
-                    # start_time은 이전 슬라이드들의 duration을 누적해서 계산
+                    # 전환 효과(xfade + acrossfade) 사용 시:
+                    # - 비디오와 오디오 모두 crossfade로 겹침
+                    # - 각 클립이 transition_duration만큼 겹침
+                    # - 자막도 이에 맞춰 타이밍 조정 필요
                     subtitle_data = []
                     current_time = 0.0
-                    for item in audio_meta:
+
+                    for i, item in enumerate(audio_meta):
+                        clip_duration = item.get("duration", 0.0)
+
+                        # 전환 효과로 인한 실제 duration 조정
+                        # 첫 번째 클립은 뒷부분만, 마지막 클립은 앞부분만, 중간은 양쪽 다 겹침
+                        if transition_effect != "none" and transition_duration > 0:
+                            if i == 0:
+                                # 첫 번째: 뒷부분 절반만 겹침
+                                effective_duration = clip_duration - (transition_duration / 2)
+                            elif i == len(audio_meta) - 1:
+                                # 마지막: 앞부분 절반만 겹침
+                                effective_duration = clip_duration - (transition_duration / 2)
+                            else:
+                                # 중간: 양쪽 다 겹침
+                                effective_duration = clip_duration - transition_duration
+                        else:
+                            effective_duration = clip_duration
+
                         subtitle_data.append({
                             "script": item.get("script", ""),
                             "start_time": current_time,
-                            "duration": item.get("duration", 0.0)
+                            "duration": max(0.5, effective_duration)  # 최소 0.5초
                         })
-                        current_time += item.get("duration", 0.0)
+
+                        # 다음 자막 시작 시간 계산
+                        if transition_effect != "none" and transition_duration > 0 and i < len(audio_meta) - 1:
+                            # 전환 효과: 겹치는 부분 제외
+                            current_time += clip_duration - transition_duration
+                        else:
+                            current_time += clip_duration
 
                     success = subtitle_generator.generate_srt(subtitle_data, subtitle_file)
 

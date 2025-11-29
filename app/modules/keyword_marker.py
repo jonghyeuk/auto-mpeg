@@ -614,18 +614,29 @@ class KeywordMarker:
                     # 숫자 부분 추출 (예: "$1" -> "1", "$12" -> "12")
                     number_part = search_text[1:]
 
-                    # 정확한 매칭을 위한 정규식 패턴들
+                    # 디버그: 모든 OCR 결과 출력 (마커 관련 텍스트만)
+                    print(f"    🔍 화살표 마커 '{search_text}' 검색 중...")
+                    marker_related = []
+                    for (bbox, text, confidence) in ocr_results:
+                        text_clean = text.strip()
+                        # 숫자나 $ 관련 문자가 포함된 짧은 텍스트만 표시
+                        if len(text_clean) <= 6 and (number_part in text_clean or
+                            any(c in text_clean.lower() for c in ['$', 's', '5'])):
+                            marker_related.append(f"'{text_clean}' (신뢰도: {confidence:.2f})")
+                    if marker_related:
+                        print(f"    📋 관련 OCR 결과: {', '.join(marker_related)}")
+
+                    # 정확한 매칭을 위한 정규식 패턴들 (더 유연하게)
                     # $3을 찾을 때 "3", "$3", "S3", "s3", "53" 등 정확히 매칭
-                    # 하지만 "13", "23", "30", "3단계" 등은 제외
                     exact_patterns = [
                         rf'^[\$sS5]?{re.escape(number_part)}$',  # 정확히 일치 (예: "$3", "S3", "3")
-                        rf'^[\$sS5]{re.escape(number_part)}[.,:]?$',  # 뒤에 구두점 (예: "$3.", "$3,")
+                        rf'^[\$sS5]{re.escape(number_part)}[.,:\s]*$',  # 뒤에 구두점/공백 (예: "$3.", "$3 ")
+                        rf'^[\$sS5]?\s*{re.escape(number_part)}\s*$',  # 앞뒤 공백 허용
+                        rf'^[sS\$5]{re.escape(number_part)}$',  # S2, s2, $2, 52 정확히
                     ]
 
-                    print(f"    🔍 화살표 마커 '{search_text}' 검색 중... (정확한 매칭)")
-
                     for (bbox, text, confidence) in ocr_results:
-                        if confidence < 0.2:
+                        if confidence < 0.15:  # 신뢰도 임계값 낮춤
                             continue
 
                         text_clean = text.strip()
@@ -651,34 +662,37 @@ class KeywordMarker:
                                 print(f"    ✓ 화살표 마커 정확 매칭: '{search_text}' -> '{text_clean}' (신뢰도: {confidence:.2f})")
                                 break
 
-                    # 정확한 매칭이 없으면 부분 매칭 시도 (더 엄격하게)
+                    # 정확한 매칭이 없으면 부분 매칭 시도 (더 유연하게)
                     if not results:
                         print(f"    ⚠️ 정확한 매칭 없음, 부분 매칭 시도...")
                         for (bbox, text, confidence) in ocr_results:
-                            if confidence < 0.3:  # 부분 매칭은 더 높은 신뢰도 요구
+                            if confidence < 0.2:  # 부분 매칭도 낮은 신뢰도 허용
                                 continue
 
                             text_clean = text.strip()
-                            # 텍스트가 짧고 (5자 이하) 숫자 부분이 정확히 포함되어 있으면 매칭
-                            if len(text_clean) <= 5:
+                            # 텍스트가 짧고 (8자 이하) 숫자 부분이 정확히 포함되어 있으면 매칭
+                            if len(text_clean) <= 8:
                                 # 숫자가 정확히 일치하는지 확인 (앞뒤에 다른 숫자 없이)
                                 if re.search(rf'(?<![0-9]){re.escape(number_part)}(?![0-9])', text_clean):
-                                    x0 = int(min(point[0] for point in bbox))
-                                    y0 = int(min(point[1] for point in bbox))
-                                    x1 = int(max(point[0] for point in bbox))
-                                    y1 = int(max(point[1] for point in bbox))
+                                    # 추가로 $ 또는 S 관련 문자가 있는지 확인
+                                    has_dollar_char = any(c in text_clean.lower() for c in ['$', 's', '5'])
+                                    if has_dollar_char or len(text_clean) <= 3:
+                                        x0 = int(min(point[0] for point in bbox))
+                                        y0 = int(min(point[1] for point in bbox))
+                                        x1 = int(max(point[0] for point in bbox))
+                                        y1 = int(max(point[1] for point in bbox))
 
-                                    center_x = (x0 + x1) // 2
-                                    center_y = (y0 + y1) // 2
+                                        center_x = (x0 + x1) // 2
+                                        center_y = (y0 + y1) // 2
 
-                                    results.append({
-                                        "x": center_x,
-                                        "y": center_y,
-                                        "bbox": (x0, y0, x1, y1),
-                                        "text": text_clean,
-                                        "confidence": confidence
-                                    })
-                                    print(f"    ✓ 화살표 마커 부분 매칭: '{search_text}' -> '{text_clean}' (신뢰도: {confidence:.2f})")
+                                        results.append({
+                                            "x": center_x,
+                                            "y": center_y,
+                                            "bbox": (x0, y0, x1, y1),
+                                            "text": text_clean,
+                                            "confidence": confidence
+                                        })
+                                        print(f"    ✓ 화살표 마커 부분 매칭: '{search_text}' -> '{text_clean}' (신뢰도: {confidence:.2f})")
                 else:
                     # 일반 텍스트 매칭
                     for (bbox, text, confidence) in ocr_results:
