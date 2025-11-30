@@ -53,13 +53,13 @@ class GradioUI:
 
     def parse_arrow_pointers(self, custom_request):
         """
-        사용자 요청에서 $숫자 마커를 파싱하여 화살표 포인터 정보 추출
+        사용자 요청에서 ★숫자 마커를 파싱하여 화살표 포인터 정보 추출
 
-        예: "$1 냉각보조장치" → {"marker": "$1", "keyword": "냉각보조장치"}
-            "$2 온도센서" → {"marker": "$2", "keyword": "온도센서"}
+        예: "★1 냉각보조장치" → {"marker": "★1", "keyword": "냉각보조장치"}
+            "★2 온도센서" → {"marker": "★2", "keyword": "온도센서"}
 
         Returns:
-            list: [{"marker": "$1", "keyword": "키워드1"}, ...]
+            list: [{"marker": "★1", "keyword": "키워드1"}, ...]
         """
         import re
 
@@ -68,16 +68,17 @@ class GradioUI:
 
         arrow_pointers = []
 
-        # $숫자 패턴 찾기: "$1 키워드" 또는 "$1키워드"
-        # $1 ~ $99까지 지원
-        pattern = r'\$(\d{1,2})\s*([^\n,$]+)'
+        # ★숫자 패턴 찾기: "★1 키워드" 또는 "★1키워드"
+        # ★1 ~ ★99까지 지원
+        # ★ 또는 ☆ 모두 지원
+        pattern = r'[★☆](\d{1,2})\s*([^\n,★☆]+)'
         matches = re.findall(pattern, custom_request)
 
         for num, keyword in matches:
             keyword = keyword.strip()
             if keyword:
                 arrow_pointers.append({
-                    "marker": f"${num}",
+                    "marker": f"★{num}",
                     "keyword": keyword
                 })
 
@@ -636,7 +637,7 @@ class GradioUI:
                     log_output = self.log("", log_output)
                     keyword_overlays = []
 
-            # $숫자 화살표 포인터 처리
+            # ★숫자 화살표 포인터 처리
             arrow_pointers = []
             parsed_arrows = self.parse_arrow_pointers(custom_request)
             if parsed_arrows and slide_image_path:
@@ -645,10 +646,10 @@ class GradioUI:
 
                     # 위에서 생성된 marker 인스턴스 재사용 (KeywordMarker)
                     for arrow_info in parsed_arrows:
-                        arrow_marker = arrow_info["marker"]  # $1, $2, ...
+                        arrow_marker = arrow_info["marker"]  # ★1, ★2, ...
                         arrow_keyword = arrow_info["keyword"]
 
-                        # $숫자 마커 위치 찾기 (OCR)
+                        # ★숫자 마커 위치 찾기 (OCR)
                         marker_results = marker.find_text_position(
                             slide_image_path=str(slide_image_path),
                             search_text=arrow_marker,
@@ -661,6 +662,7 @@ class GradioUI:
                             marker_pos = marker_results[0]
                             marker_x = marker_pos.get("x", 0)
                             marker_y = marker_pos.get("y", 0)
+                            marker_bbox = marker_pos.get("bbox", None)  # (x0, y0, x1, y1)
 
                             # 대본에서 키워드 위치로 타이밍 계산 (글자 수 기반)
                             keyword_pos = script.lower().find(arrow_keyword.lower())
@@ -678,7 +680,8 @@ class GradioUI:
                                     "keyword": arrow_keyword,
                                     "target_x": marker_x,
                                     "target_y": marker_y,
-                                    "timing": timing
+                                    "timing": timing,
+                                    "marker_bbox": marker_bbox  # 마커 제거용 bbox
                                 })
                                 log_output = self.log(f"  ✓ {arrow_marker} '{arrow_keyword}' → 화살표 @{timing:.1f}초 (위치: {marker_x}, {marker_y})", log_output)
                             else:
@@ -1155,16 +1158,43 @@ class GradioUI:
                     subtitle_file = config.META_DIR / f"{output_name}.srt"
 
                     # audio_meta에서 스크립트와 타이밍 정보 추출
-                    # start_time은 이전 슬라이드들의 duration을 누적해서 계산
+                    # 전환 효과(xfade + acrossfade) 사용 시:
+                    # - 비디오와 오디오 모두 crossfade로 겹침
+                    # - 각 클립이 transition_duration만큼 겹침
+                    # - 자막도 이에 맞춰 타이밍 조정 필요
                     subtitle_data = []
                     current_time = 0.0
-                    for item in audio_meta:
+
+                    for i, item in enumerate(audio_meta):
+                        clip_duration = item.get("duration", 0.0)
+
+                        # 전환 효과로 인한 실제 duration 조정
+                        # 첫 번째 클립은 뒷부분만, 마지막 클립은 앞부분만, 중간은 양쪽 다 겹침
+                        if transition_effect != "none" and transition_duration > 0:
+                            if i == 0:
+                                # 첫 번째: 뒷부분 절반만 겹침
+                                effective_duration = clip_duration - (transition_duration / 2)
+                            elif i == len(audio_meta) - 1:
+                                # 마지막: 앞부분 절반만 겹침
+                                effective_duration = clip_duration - (transition_duration / 2)
+                            else:
+                                # 중간: 양쪽 다 겹침
+                                effective_duration = clip_duration - transition_duration
+                        else:
+                            effective_duration = clip_duration
+
                         subtitle_data.append({
                             "script": item.get("script", ""),
                             "start_time": current_time,
-                            "duration": item.get("duration", 0.0)
+                            "duration": max(0.5, effective_duration)  # 최소 0.5초
                         })
-                        current_time += item.get("duration", 0.0)
+
+                        # 다음 자막 시작 시간 계산
+                        if transition_effect != "none" and transition_duration > 0 and i < len(audio_meta) - 1:
+                            # 전환 효과: 겹치는 부분 제외
+                            current_time += clip_duration - transition_duration
+                        else:
+                            current_time += clip_duration
 
                     success = subtitle_generator.generate_srt(subtitle_data, subtitle_file)
 
@@ -1195,6 +1225,38 @@ class GradioUI:
             log_output = self.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", log_output)
             log_output = self.log("", log_output)
             yield log_output, None
+
+            # 화살표 마커(★1, ★2 등) 영역을 슬라이드 이미지에서 제거
+            # (영상에서 마커가 보이지 않도록)
+            marker_removal_count = 0
+            for script_item in scripts_data:
+                arrow_pointers = script_item.get("arrow_pointers", [])
+                if arrow_pointers:
+                    slide_idx = script_item.get("index", 0)
+                    slide_path = config.SLIDES_IMG_DIR / f"slide_{slide_idx:03d}.png"
+
+                    if slide_path.exists():
+                        bboxes = []
+                        for arrow in arrow_pointers:
+                            bbox = arrow.get("marker_bbox")
+                            if bbox:
+                                bboxes.append(bbox)
+
+                        if bboxes:
+                            # KeywordMarker를 사용하여 마커 제거 (인페인팅)
+                            temp_marker = KeywordMarker(use_ocr=False)
+                            temp_marker.remove_markers_from_image(
+                                str(slide_path),
+                                bboxes,
+                                output_path=str(slide_path),  # 원본 덮어쓰기
+                                method="inpaint"
+                            )
+                            marker_removal_count += len(bboxes)
+
+            if marker_removal_count > 0:
+                log_output = self.log(f"🧹 화살표 마커 {marker_removal_count}개 제거 완료 (영상에서 숨김)", log_output)
+                log_output = self.log("", log_output)
+                yield log_output, None
 
             # 영상 품질 매핑 (CRF: 낮을수록 고품질)
             quality_map = {"high": 18, "medium": 23, "low": 28}

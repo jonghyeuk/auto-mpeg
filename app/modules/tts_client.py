@@ -38,16 +38,17 @@ class TTSClient:
         else:
             raise ValueError(f"지원하지 않는 TTS 제공자: {provider}")
 
-    def text_to_speech_openai(self, text: str, output_path: Path) -> float:
+    def text_to_speech_openai(self, text: str, output_path: Path, pause_duration: float = 0.7) -> float:
         """
         OpenAI TTS를 사용하여 음성 생성
 
         Args:
             text: 변환할 텍스트
             output_path: 출력 오디오 파일 경로
+            pause_duration: 오디오 끝에 추가할 무음 길이 (초, 기본 0.7초)
 
         Returns:
-            오디오 길이 (초)
+            오디오 길이 (초) - 무음 포함
         """
         try:
             # OpenAI TTS 호출
@@ -57,8 +58,16 @@ class TTSClient:
                 input=text
             )
 
-            # 오디오 파일 저장
-            response.stream_to_file(str(output_path))
+            # 임시 파일로 저장
+            temp_path = output_path.parent / f"{output_path.stem}_temp{output_path.suffix}"
+            response.stream_to_file(str(temp_path))
+
+            # 무음 추가 (자연스러운 간격)
+            if pause_duration > 0:
+                self.add_silence_to_audio(temp_path, output_path, pause_duration)
+                temp_path.unlink()  # 임시 파일 삭제
+            else:
+                temp_path.rename(output_path)
 
             # 오디오 길이 계산 (ffprobe 사용)
             duration = self.get_audio_duration(output_path)
@@ -68,6 +77,43 @@ class TTSClient:
         except Exception as e:
             print(f"✗ OpenAI TTS 실패: {e}")
             raise
+
+    def add_silence_to_audio(self, input_path: Path, output_path: Path, silence_duration: float = 0.7) -> bool:
+        """
+        오디오 파일 끝에 무음 추가 (슬라이드 전환 시 자연스러운 간격)
+
+        Args:
+            input_path: 입력 오디오 파일
+            output_path: 출력 오디오 파일
+            silence_duration: 무음 길이 (초)
+
+        Returns:
+            성공 여부
+        """
+        try:
+            # FFmpeg으로 무음 추가
+            # apad 필터로 끝에 무음 추가 후 정확한 길이로 자르기
+            original_duration = self.get_audio_duration(input_path)
+            total_duration = original_duration + silence_duration
+
+            cmd = [
+                "ffmpeg",
+                "-i", str(input_path),
+                "-af", f"apad=pad_dur={silence_duration}",
+                "-t", str(total_duration),
+                "-y",
+                str(output_path)
+            ]
+
+            subprocess.run(cmd, capture_output=True, check=True)
+            return True
+
+        except subprocess.CalledProcessError as e:
+            print(f"⚠ 무음 추가 실패: {e.stderr}")
+            # 실패 시 원본 복사
+            import shutil
+            shutil.copy(str(input_path), str(output_path))
+            return False
 
     def get_audio_duration(self, audio_path: Path) -> float:
         """

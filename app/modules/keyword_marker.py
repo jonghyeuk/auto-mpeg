@@ -580,7 +580,7 @@ class KeywordMarker:
 
         Args:
             slide_image_path: 슬라이드 이미지 경로
-            search_text: 찾을 텍스트 (예: "$1", "$2")
+            search_text: 찾을 텍스트 (예: "★1", "★2")
             pdf_path: PDF 파일 경로 (선택)
             page_num: 페이지 번호 (선택)
 
@@ -606,26 +606,37 @@ class KeywordMarker:
                 # 정규화된 검색 텍스트
                 search_normalized = search_text.lower().strip()
 
-                # $숫자 패턴 특별 처리 (예: "$1", "$2")
-                # OCR이 "$"를 "S", "5", "s" 등으로 잘못 인식할 수 있음
-                is_dollar_pattern = search_text.startswith("$") and len(search_text) >= 2
+                # ★숫자 패턴 특별 처리 (예: "★1", "★2")
+                # ★ 또는 ☆ 문자로 시작하는 마커
+                is_star_pattern = search_text.startswith("★") or search_text.startswith("☆")
 
-                if is_dollar_pattern:
-                    # 숫자 부분 추출 (예: "$1" -> "1", "$12" -> "12")
+                if is_star_pattern:
+                    # 숫자 부분 추출 (예: "★1" -> "1", "★12" -> "12")
                     number_part = search_text[1:]
 
+                    # 디버그: 모든 OCR 결과 출력 (마커 관련 텍스트만)
+                    print(f"    🔍 화살표 마커 '{search_text}' 검색 중...")
+                    marker_related = []
+                    for (bbox, text, confidence) in ocr_results:
+                        text_clean = text.strip()
+                        # 별 모양 또는 숫자가 포함된 짧은 텍스트만 표시
+                        if len(text_clean) <= 8 and (number_part in text_clean or
+                            any(c in text_clean for c in ['★', '☆', '*', '⭐'])):
+                            marker_related.append(f"'{text_clean}' (신뢰도: {confidence:.2f})")
+                    if marker_related:
+                        print(f"    📋 관련 OCR 결과: {', '.join(marker_related)}")
+
                     # 정확한 매칭을 위한 정규식 패턴들
-                    # $3을 찾을 때 "3", "$3", "S3", "s3", "53" 등 정확히 매칭
-                    # 하지만 "13", "23", "30", "3단계" 등은 제외
+                    # ★1을 찾을 때 "★1", "☆1", "*1", "⭐1" 등 매칭
                     exact_patterns = [
-                        rf'^[\$sS5]?{re.escape(number_part)}$',  # 정확히 일치 (예: "$3", "S3", "3")
-                        rf'^[\$sS5]{re.escape(number_part)}[.,:]?$',  # 뒤에 구두점 (예: "$3.", "$3,")
+                        rf'^[★☆*⭐]\s*{re.escape(number_part)}$',  # ★1, ☆1, *1
+                        rf'^[★☆*⭐]\s*{re.escape(number_part)}[.,:\s]*$',  # 뒤에 구두점/공백
+                        rf'^{re.escape(number_part)}[★☆*⭐]$',  # 1★, 1☆ (역순)
+                        rf'^[★☆*⭐]?\s*{re.escape(number_part)}\s*$',  # 공백 허용
                     ]
 
-                    print(f"    🔍 화살표 마커 '{search_text}' 검색 중... (정확한 매칭)")
-
                     for (bbox, text, confidence) in ocr_results:
-                        if confidence < 0.2:
+                        if confidence < 0.15:  # 신뢰도 임계값 낮춤
                             continue
 
                         text_clean = text.strip()
@@ -651,18 +662,21 @@ class KeywordMarker:
                                 print(f"    ✓ 화살표 마커 정확 매칭: '{search_text}' -> '{text_clean}' (신뢰도: {confidence:.2f})")
                                 break
 
-                    # 정확한 매칭이 없으면 부분 매칭 시도 (더 엄격하게)
+                    # 정확한 매칭이 없으면 부분 매칭 시도
                     if not results:
                         print(f"    ⚠️ 정확한 매칭 없음, 부분 매칭 시도...")
                         for (bbox, text, confidence) in ocr_results:
-                            if confidence < 0.3:  # 부분 매칭은 더 높은 신뢰도 요구
+                            if confidence < 0.2:
                                 continue
 
                             text_clean = text.strip()
-                            # 텍스트가 짧고 (5자 이하) 숫자 부분이 정확히 포함되어 있으면 매칭
-                            if len(text_clean) <= 5:
-                                # 숫자가 정확히 일치하는지 확인 (앞뒤에 다른 숫자 없이)
-                                if re.search(rf'(?<![0-9]){re.escape(number_part)}(?![0-9])', text_clean):
+                            # 텍스트가 짧고 (8자 이하)
+                            if len(text_clean) <= 8:
+                                # 별 모양 문자가 있고 숫자가 정확히 일치
+                                has_star = any(c in text_clean for c in ['★', '☆', '*', '⭐'])
+                                has_number = re.search(rf'(?<![0-9]){re.escape(number_part)}(?![0-9])', text_clean)
+
+                                if has_star and has_number:
                                     x0 = int(min(point[0] for point in bbox))
                                     y0 = int(min(point[1] for point in bbox))
                                     x1 = int(max(point[0] for point in bbox))
@@ -679,6 +693,34 @@ class KeywordMarker:
                                         "confidence": confidence
                                     })
                                     print(f"    ✓ 화살표 마커 부분 매칭: '{search_text}' -> '{text_clean}' (신뢰도: {confidence:.2f})")
+
+                    # 여전히 없으면 숫자만으로 매칭 시도 (마지막 수단)
+                    if not results:
+                        print(f"    ⚠️ 별 패턴 없음, 숫자만으로 시도...")
+                        for (bbox, text, confidence) in ocr_results:
+                            if confidence < 0.3:
+                                continue
+
+                            text_clean = text.strip()
+                            # 매우 짧은 텍스트 (3자 이하)이고 숫자만 있으면 매칭
+                            if len(text_clean) <= 3 and text_clean == number_part:
+                                x0 = int(min(point[0] for point in bbox))
+                                y0 = int(min(point[1] for point in bbox))
+                                x1 = int(max(point[0] for point in bbox))
+                                y1 = int(max(point[1] for point in bbox))
+
+                                center_x = (x0 + x1) // 2
+                                center_y = (y0 + y1) // 2
+
+                                results.append({
+                                    "x": center_x,
+                                    "y": center_y,
+                                    "bbox": (x0, y0, x1, y1),
+                                    "text": text_clean,
+                                    "confidence": confidence
+                                })
+                                print(f"    ✓ 화살표 마커 숫자 매칭: '{search_text}' -> '{text_clean}' (신뢰도: {confidence:.2f})")
+                                break
                 else:
                     # 일반 텍스트 매칭
                     for (bbox, text, confidence) in ocr_results:
@@ -713,12 +755,133 @@ class KeywordMarker:
             print(f"    📊 {len(results)}개 매칭 중 신뢰도 최고: '{results[0]['text']}' (신뢰도: {results[0]['confidence']:.2f})")
             results = [results[0]]  # 가장 높은 신뢰도 것만 반환
 
-        # $숫자 패턴 결과 로깅 (블록 밖에서 변수 확인)
-        is_dollar_pattern_check = search_text.startswith("$") and len(search_text) >= 2
-        if is_dollar_pattern_check and not results:
-            print(f"    ⚠️ 화살표 마커 '{search_text}'를 찾지 못함 (흰색 글씨는 OCR 인식이 어려울 수 있음)")
+        # ★숫자 패턴 결과 로깅 (블록 밖에서 변수 확인)
+        is_star_pattern_check = search_text.startswith("★") or search_text.startswith("☆")
+        if is_star_pattern_check and not results:
+            print(f"    ⚠️ 화살표 마커 '{search_text}'를 찾지 못함 (마커 색상이 배경과 대비되는지 확인하세요)")
 
         return results
+
+    def remove_markers_from_image(self, image_path: str, bboxes: List[Tuple[int, int, int, int]],
+                                   output_path: str = None, method: str = "inpaint") -> str:
+        """
+        이미지에서 마커 영역을 제거 (주변 색상으로 채움)
+
+        Args:
+            image_path: 원본 이미지 경로
+            bboxes: 제거할 영역들 [(x0, y0, x1, y1), ...]
+            output_path: 출력 경로 (None이면 원본 덮어쓰기)
+            method: 'inpaint' (OpenCV 인페인팅) 또는 'fill' (주변색 채우기)
+
+        Returns:
+            저장된 이미지 경로
+        """
+        if not bboxes:
+            return image_path
+
+        # 이미지 로드
+        img = cv2.imread(image_path)
+        if img is None:
+            print(f"⚠️ 이미지를 로드할 수 없습니다: {image_path}")
+            return image_path
+
+        height, width = img.shape[:2]
+
+        if method == "inpaint":
+            # OpenCV 인페인팅 사용 (자연스러운 제거)
+            mask = np.zeros((height, width), dtype=np.uint8)
+
+            for bbox in bboxes:
+                x0, y0, x1, y1 = bbox
+                # bbox에 약간의 여유 추가
+                padding = 3
+                x0 = max(0, x0 - padding)
+                y0 = max(0, y0 - padding)
+                x1 = min(width, x1 + padding)
+                y1 = min(height, y1 + padding)
+
+                # 마스크에 제거할 영역 표시
+                cv2.rectangle(mask, (x0, y0), (x1, y1), 255, -1)
+
+            # 인페인팅 적용
+            result = cv2.inpaint(img, mask, inpaintRadius=5, flags=cv2.INPAINT_TELEA)
+
+        else:  # method == "fill"
+            result = img.copy()
+
+            for bbox in bboxes:
+                x0, y0, x1, y1 = bbox
+                padding = 3
+                x0 = max(0, x0 - padding)
+                y0 = max(0, y0 - padding)
+                x1 = min(width, x1 + padding)
+                y1 = min(height, y1 + padding)
+
+                # 주변 픽셀에서 색상 샘플링 (bbox 바로 바깥 영역)
+                sample_region = []
+
+                # 위쪽 가장자리
+                if y0 > 0:
+                    sample_region.extend(img[max(0, y0-5):y0, x0:x1].reshape(-1, 3).tolist())
+                # 아래쪽 가장자리
+                if y1 < height:
+                    sample_region.extend(img[y1:min(height, y1+5), x0:x1].reshape(-1, 3).tolist())
+                # 왼쪽 가장자리
+                if x0 > 0:
+                    sample_region.extend(img[y0:y1, max(0, x0-5):x0].reshape(-1, 3).tolist())
+                # 오른쪽 가장자리
+                if x1 < width:
+                    sample_region.extend(img[y0:y1, x1:min(width, x1+5)].reshape(-1, 3).tolist())
+
+                if sample_region:
+                    # 주변 색상의 중앙값 사용
+                    fill_color = np.median(sample_region, axis=0).astype(np.uint8)
+                else:
+                    # 기본값: 검정색
+                    fill_color = np.array([0, 0, 0], dtype=np.uint8)
+
+                # 영역 채우기
+                cv2.rectangle(result, (x0, y0), (x1, y1), fill_color.tolist(), -1)
+
+        # 저장
+        if output_path is None:
+            output_path = image_path
+
+        cv2.imwrite(output_path, result)
+        print(f"✓ 마커 {len(bboxes)}개 제거 완료: {output_path}")
+
+        return output_path
+
+
+def remove_markers_from_slides(slides_dir: Path, arrow_pointers_by_slide: Dict, output_dir: Path = None):
+    """
+    여러 슬라이드에서 마커 제거 (유틸리티 함수)
+
+    Args:
+        slides_dir: 슬라이드 이미지 디렉토리
+        arrow_pointers_by_slide: {slide_index: [arrow_pointer, ...], ...}
+        output_dir: 출력 디렉토리 (None이면 원본 디렉토리)
+    """
+    marker = KeywordMarker(use_ocr=False)  # OCR 불필요
+
+    for slide_idx, arrow_pointers in arrow_pointers_by_slide.items():
+        slide_path = slides_dir / f"slide_{slide_idx:03d}.png"
+        if not slide_path.exists():
+            continue
+
+        bboxes = []
+        for arrow in arrow_pointers:
+            bbox = arrow.get("marker_bbox")
+            if bbox:
+                bboxes.append(bbox)
+
+        if bboxes:
+            output_path = None
+            if output_dir:
+                output_dir.mkdir(parents=True, exist_ok=True)
+                output_path = str(output_dir / f"slide_{slide_idx:03d}.png")
+
+            marker.remove_markers_from_image(str(slide_path), bboxes, output_path)
 
 
 if __name__ == "__main__":
