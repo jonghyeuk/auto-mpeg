@@ -53,13 +53,17 @@ class GradioUI:
 
     def parse_arrow_pointers(self, custom_request):
         """
-        사용자 요청에서 ★숫자 마커를 파싱하여 화살표 포인터 정보 추출
+        사용자 요청에서 [숫자] 마커를 파싱하여 화살표 포인터 정보 추출
 
-        예: "★1 냉각보조장치" → {"marker": "★1", "keyword": "냉각보조장치"}
-            "★2 온도센서" → {"marker": "★2", "keyword": "온도센서"}
+        예: "[1] 냉각보조장치" → {"marker": "[1]", "keyword": "냉각보조장치"}
+            "[2] 온도센서" → {"marker": "[2]", "keyword": "온도센서"}
+
+        지원 형식:
+        - [1], [2], ... [99] (대괄호 - 권장, OCR 인식률 최고)
+        - ★1, ★2, ... (별표 - 하위 호환성)
 
         Returns:
-            list: [{"marker": "★1", "keyword": "키워드1"}, ...]
+            list: [{"marker": "[1]", "keyword": "키워드1"}, ...]
         """
         import re
 
@@ -68,19 +72,31 @@ class GradioUI:
 
         arrow_pointers = []
 
-        # ★숫자 패턴 찾기: "★1 키워드" 또는 "★1키워드"
-        # ★1 ~ ★99까지 지원
-        # ★ 또는 ☆ 모두 지원
-        pattern = r'[★☆](\d{1,2})\s*([^\n,★☆]+)'
-        matches = re.findall(pattern, custom_request)
+        # [숫자] 패턴 찾기 (권장): "[1] 키워드" 또는 "[1]키워드"
+        # [1] ~ [99]까지 지원
+        bracket_pattern = r'\[(\d{1,2})\]\s*([^\n,\[\]]+)'
+        bracket_matches = re.findall(bracket_pattern, custom_request)
 
-        for num, keyword in matches:
+        for num, keyword in bracket_matches:
             keyword = keyword.strip()
             if keyword:
                 arrow_pointers.append({
-                    "marker": f"★{num}",
+                    "marker": f"[{num}]",
                     "keyword": keyword
                 })
+
+        # ★숫자 패턴 (하위 호환성): "★1 키워드"
+        if not arrow_pointers:
+            star_pattern = r'[★☆](\d{1,2})\s*([^\n,★☆]+)'
+            star_matches = re.findall(star_pattern, custom_request)
+
+            for num, keyword in star_matches:
+                keyword = keyword.strip()
+                if keyword:
+                    arrow_pointers.append({
+                        "marker": f"[{num}]",  # 내부적으로 [숫자] 형식으로 통일
+                        "keyword": keyword
+                    })
 
         return arrow_pointers
 
