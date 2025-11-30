@@ -656,6 +656,12 @@ class GradioUI:
             # ★숫자 화살표 포인터 처리
             arrow_pointers = []
             parsed_arrows = self.parse_arrow_pointers(custom_request)
+
+            # 디버그: 화살표 포인터 파싱 결과 확인
+            print(f"    🔎 [디버그] custom_request: '{custom_request[:100] if custom_request else 'None'}...'")
+            print(f"    🔎 [디버그] parsed_arrows: {parsed_arrows}")
+            print(f"    🔎 [디버그] slide_image_path: {slide_image_path}")
+
             if parsed_arrows and slide_image_path:
                 try:
                     log_output = self.log("🏹 화살표 포인터 처리:", log_output)
