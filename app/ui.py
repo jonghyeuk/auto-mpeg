@@ -53,13 +53,13 @@ class GradioUI:
 
     def parse_arrow_pointers(self, custom_request):
         """
-        사용자 요청에서 $숫자 마커를 파싱하여 화살표 포인터 정보 추출
+        사용자 요청에서 ★숫자 마커를 파싱하여 화살표 포인터 정보 추출
 
-        예: "$1 냉각보조장치" → {"marker": "$1", "keyword": "냉각보조장치"}
-            "$2 온도센서" → {"marker": "$2", "keyword": "온도센서"}
+        예: "★1 냉각보조장치" → {"marker": "★1", "keyword": "냉각보조장치"}
+            "★2 온도센서" → {"marker": "★2", "keyword": "온도센서"}
 
         Returns:
-            list: [{"marker": "$1", "keyword": "키워드1"}, ...]
+            list: [{"marker": "★1", "keyword": "키워드1"}, ...]
         """
         import re
 
@@ -68,16 +68,17 @@ class GradioUI:
 
         arrow_pointers = []
 
-        # $숫자 패턴 찾기: "$1 키워드" 또는 "$1키워드"
-        # $1 ~ $99까지 지원
-        pattern = r'\$(\d{1,2})\s*([^\n,$]+)'
+        # ★숫자 패턴 찾기: "★1 키워드" 또는 "★1키워드"
+        # ★1 ~ ★99까지 지원
+        # ★ 또는 ☆ 모두 지원
+        pattern = r'[★☆](\d{1,2})\s*([^\n,★☆]+)'
         matches = re.findall(pattern, custom_request)
 
         for num, keyword in matches:
             keyword = keyword.strip()
             if keyword:
                 arrow_pointers.append({
-                    "marker": f"${num}",
+                    "marker": f"★{num}",
                     "keyword": keyword
                 })
 
@@ -636,7 +637,7 @@ class GradioUI:
                     log_output = self.log("", log_output)
                     keyword_overlays = []
 
-            # $숫자 화살표 포인터 처리
+            # ★숫자 화살표 포인터 처리
             arrow_pointers = []
             parsed_arrows = self.parse_arrow_pointers(custom_request)
             if parsed_arrows and slide_image_path:
@@ -645,10 +646,10 @@ class GradioUI:
 
                     # 위에서 생성된 marker 인스턴스 재사용 (KeywordMarker)
                     for arrow_info in parsed_arrows:
-                        arrow_marker = arrow_info["marker"]  # $1, $2, ...
+                        arrow_marker = arrow_info["marker"]  # ★1, ★2, ...
                         arrow_keyword = arrow_info["keyword"]
 
-                        # $숫자 마커 위치 찾기 (OCR)
+                        # ★숫자 마커 위치 찾기 (OCR)
                         marker_results = marker.find_text_position(
                             slide_image_path=str(slide_image_path),
                             search_text=arrow_marker,
@@ -1225,7 +1226,7 @@ class GradioUI:
             log_output = self.log("", log_output)
             yield log_output, None
 
-            # 화살표 마커($1, $2 등) 영역을 슬라이드 이미지에서 제거
+            # 화살표 마커(★1, ★2 등) 영역을 슬라이드 이미지에서 제거
             # (영상에서 마커가 보이지 않도록)
             marker_removal_count = 0
             for script_item in scripts_data:

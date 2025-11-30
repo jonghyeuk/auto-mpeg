@@ -580,7 +580,7 @@ class KeywordMarker:
 
         Args:
             slide_image_path: 슬라이드 이미지 경로
-            search_text: 찾을 텍스트 (예: "$1", "$2")
+            search_text: 찾을 텍스트 (예: "★1", "★2")
             pdf_path: PDF 파일 경로 (선택)
             page_num: 페이지 번호 (선택)
 
@@ -606,12 +606,12 @@ class KeywordMarker:
                 # 정규화된 검색 텍스트
                 search_normalized = search_text.lower().strip()
 
-                # $숫자 패턴 특별 처리 (예: "$1", "$2")
-                # OCR이 "$"를 "S", "5", "s" 등으로 잘못 인식할 수 있음
-                is_dollar_pattern = search_text.startswith("$") and len(search_text) >= 2
+                # ★숫자 패턴 특별 처리 (예: "★1", "★2")
+                # ★ 또는 ☆ 문자로 시작하는 마커
+                is_star_pattern = search_text.startswith("★") or search_text.startswith("☆")
 
-                if is_dollar_pattern:
-                    # 숫자 부분 추출 (예: "$1" -> "1", "$12" -> "12")
+                if is_star_pattern:
+                    # 숫자 부분 추출 (예: "★1" -> "1", "★12" -> "12")
                     number_part = search_text[1:]
 
                     # 디버그: 모든 OCR 결과 출력 (마커 관련 텍스트만)
@@ -619,20 +619,20 @@ class KeywordMarker:
                     marker_related = []
                     for (bbox, text, confidence) in ocr_results:
                         text_clean = text.strip()
-                        # 숫자나 $ 관련 문자가 포함된 짧은 텍스트만 표시
-                        if len(text_clean) <= 6 and (number_part in text_clean or
-                            any(c in text_clean.lower() for c in ['$', 's', '5'])):
+                        # 별 모양 또는 숫자가 포함된 짧은 텍스트만 표시
+                        if len(text_clean) <= 8 and (number_part in text_clean or
+                            any(c in text_clean for c in ['★', '☆', '*', '⭐'])):
                             marker_related.append(f"'{text_clean}' (신뢰도: {confidence:.2f})")
                     if marker_related:
                         print(f"    📋 관련 OCR 결과: {', '.join(marker_related)}")
 
-                    # 정확한 매칭을 위한 정규식 패턴들 (더 유연하게)
-                    # $3을 찾을 때 "3", "$3", "S3", "s3", "53" 등 정확히 매칭
+                    # 정확한 매칭을 위한 정규식 패턴들
+                    # ★1을 찾을 때 "★1", "☆1", "*1", "⭐1" 등 매칭
                     exact_patterns = [
-                        rf'^[\$sS5]?{re.escape(number_part)}$',  # 정확히 일치 (예: "$3", "S3", "3")
-                        rf'^[\$sS5]{re.escape(number_part)}[.,:\s]*$',  # 뒤에 구두점/공백 (예: "$3.", "$3 ")
-                        rf'^[\$sS5]?\s*{re.escape(number_part)}\s*$',  # 앞뒤 공백 허용
-                        rf'^[sS\$5]{re.escape(number_part)}$',  # S2, s2, $2, 52 정확히
+                        rf'^[★☆*⭐]\s*{re.escape(number_part)}$',  # ★1, ☆1, *1
+                        rf'^[★☆*⭐]\s*{re.escape(number_part)}[.,:\s]*$',  # 뒤에 구두점/공백
+                        rf'^{re.escape(number_part)}[★☆*⭐]$',  # 1★, 1☆ (역순)
+                        rf'^[★☆*⭐]?\s*{re.escape(number_part)}\s*$',  # 공백 허용
                     ]
 
                     for (bbox, text, confidence) in ocr_results:
@@ -662,37 +662,65 @@ class KeywordMarker:
                                 print(f"    ✓ 화살표 마커 정확 매칭: '{search_text}' -> '{text_clean}' (신뢰도: {confidence:.2f})")
                                 break
 
-                    # 정확한 매칭이 없으면 부분 매칭 시도 (더 유연하게)
+                    # 정확한 매칭이 없으면 부분 매칭 시도
                     if not results:
                         print(f"    ⚠️ 정확한 매칭 없음, 부분 매칭 시도...")
                         for (bbox, text, confidence) in ocr_results:
-                            if confidence < 0.2:  # 부분 매칭도 낮은 신뢰도 허용
+                            if confidence < 0.2:
                                 continue
 
                             text_clean = text.strip()
-                            # 텍스트가 짧고 (8자 이하) 숫자 부분이 정확히 포함되어 있으면 매칭
+                            # 텍스트가 짧고 (8자 이하)
                             if len(text_clean) <= 8:
-                                # 숫자가 정확히 일치하는지 확인 (앞뒤에 다른 숫자 없이)
-                                if re.search(rf'(?<![0-9]){re.escape(number_part)}(?![0-9])', text_clean):
-                                    # 추가로 $ 또는 S 관련 문자가 있는지 확인
-                                    has_dollar_char = any(c in text_clean.lower() for c in ['$', 's', '5'])
-                                    if has_dollar_char or len(text_clean) <= 3:
-                                        x0 = int(min(point[0] for point in bbox))
-                                        y0 = int(min(point[1] for point in bbox))
-                                        x1 = int(max(point[0] for point in bbox))
-                                        y1 = int(max(point[1] for point in bbox))
+                                # 별 모양 문자가 있고 숫자가 정확히 일치
+                                has_star = any(c in text_clean for c in ['★', '☆', '*', '⭐'])
+                                has_number = re.search(rf'(?<![0-9]){re.escape(number_part)}(?![0-9])', text_clean)
 
-                                        center_x = (x0 + x1) // 2
-                                        center_y = (y0 + y1) // 2
+                                if has_star and has_number:
+                                    x0 = int(min(point[0] for point in bbox))
+                                    y0 = int(min(point[1] for point in bbox))
+                                    x1 = int(max(point[0] for point in bbox))
+                                    y1 = int(max(point[1] for point in bbox))
 
-                                        results.append({
-                                            "x": center_x,
-                                            "y": center_y,
-                                            "bbox": (x0, y0, x1, y1),
-                                            "text": text_clean,
-                                            "confidence": confidence
-                                        })
-                                        print(f"    ✓ 화살표 마커 부분 매칭: '{search_text}' -> '{text_clean}' (신뢰도: {confidence:.2f})")
+                                    center_x = (x0 + x1) // 2
+                                    center_y = (y0 + y1) // 2
+
+                                    results.append({
+                                        "x": center_x,
+                                        "y": center_y,
+                                        "bbox": (x0, y0, x1, y1),
+                                        "text": text_clean,
+                                        "confidence": confidence
+                                    })
+                                    print(f"    ✓ 화살표 마커 부분 매칭: '{search_text}' -> '{text_clean}' (신뢰도: {confidence:.2f})")
+
+                    # 여전히 없으면 숫자만으로 매칭 시도 (마지막 수단)
+                    if not results:
+                        print(f"    ⚠️ 별 패턴 없음, 숫자만으로 시도...")
+                        for (bbox, text, confidence) in ocr_results:
+                            if confidence < 0.3:
+                                continue
+
+                            text_clean = text.strip()
+                            # 매우 짧은 텍스트 (3자 이하)이고 숫자만 있으면 매칭
+                            if len(text_clean) <= 3 and text_clean == number_part:
+                                x0 = int(min(point[0] for point in bbox))
+                                y0 = int(min(point[1] for point in bbox))
+                                x1 = int(max(point[0] for point in bbox))
+                                y1 = int(max(point[1] for point in bbox))
+
+                                center_x = (x0 + x1) // 2
+                                center_y = (y0 + y1) // 2
+
+                                results.append({
+                                    "x": center_x,
+                                    "y": center_y,
+                                    "bbox": (x0, y0, x1, y1),
+                                    "text": text_clean,
+                                    "confidence": confidence
+                                })
+                                print(f"    ✓ 화살표 마커 숫자 매칭: '{search_text}' -> '{text_clean}' (신뢰도: {confidence:.2f})")
+                                break
                 else:
                     # 일반 텍스트 매칭
                     for (bbox, text, confidence) in ocr_results:
@@ -727,10 +755,10 @@ class KeywordMarker:
             print(f"    📊 {len(results)}개 매칭 중 신뢰도 최고: '{results[0]['text']}' (신뢰도: {results[0]['confidence']:.2f})")
             results = [results[0]]  # 가장 높은 신뢰도 것만 반환
 
-        # $숫자 패턴 결과 로깅 (블록 밖에서 변수 확인)
-        is_dollar_pattern_check = search_text.startswith("$") and len(search_text) >= 2
-        if is_dollar_pattern_check and not results:
-            print(f"    ⚠️ 화살표 마커 '{search_text}'를 찾지 못함 (흰색 글씨는 OCR 인식이 어려울 수 있음)")
+        # ★숫자 패턴 결과 로깅 (블록 밖에서 변수 확인)
+        is_star_pattern_check = search_text.startswith("★") or search_text.startswith("☆")
+        if is_star_pattern_check and not results:
+            print(f"    ⚠️ 화살표 마커 '{search_text}'를 찾지 못함 (마커 색상이 배경과 대비되는지 확인하세요)")
 
         return results
 
