@@ -580,7 +580,7 @@ class KeywordMarker:
 
         Args:
             slide_image_path: 슬라이드 이미지 경로
-            search_text: 찾을 텍스트 (예: "★1", "★2")
+            search_text: 찾을 텍스트 (예: "[1]", "[2]", "★1", "★2")
             pdf_path: PDF 파일 경로 (선택)
             page_num: 페이지 번호 (선택)
 
@@ -606,11 +606,104 @@ class KeywordMarker:
                 # 정규화된 검색 텍스트
                 search_normalized = search_text.lower().strip()
 
-                # ★숫자 패턴 특별 처리 (예: "★1", "★2")
-                # ★ 또는 ☆ 문자로 시작하는 마커
+                # [숫자] 패턴 특별 처리 (예: "[1]", "[2]") - 권장 형식
+                is_bracket_pattern = search_text.startswith("[") and "]" in search_text
+
+                # ★숫자 패턴 특별 처리 (예: "★1", "★2") - 하위 호환성
                 is_star_pattern = search_text.startswith("★") or search_text.startswith("☆")
 
-                if is_star_pattern:
+                if is_bracket_pattern:
+                    # 숫자 부분 추출 (예: "[1]" -> "1", "[12]" -> "12")
+                    match = re.match(r'\[(\d{1,2})\]', search_text)
+                    if not match:
+                        return results
+                    number_part = match.group(1)
+
+                    # 디버그: 모든 OCR 결과 출력 (마커 관련 텍스트만)
+                    print(f"    🔍 화살표 마커 '{search_text}' 검색 중...")
+                    marker_related = []
+                    for (bbox, text, confidence) in ocr_results:
+                        text_clean = text.strip()
+                        # 대괄호 또는 숫자가 포함된 짧은 텍스트만 표시
+                        if len(text_clean) <= 10 and (number_part in text_clean or
+                            any(c in text_clean for c in ['[', ']', '(', ')'])):
+                            marker_related.append(f"'{text_clean}' (신뢰도: {confidence:.2f})")
+                    if marker_related:
+                        print(f"    📋 관련 OCR 결과: {', '.join(marker_related)}")
+
+                    # 정확한 매칭을 위한 정규식 패턴들
+                    # [1]을 찾을 때 "[1]", "(1)", "[1 ]" 등 매칭
+                    exact_patterns = [
+                        rf'^\[{re.escape(number_part)}\]$',  # [1] 정확히
+                        rf'^\[\s*{re.escape(number_part)}\s*\]$',  # [ 1 ] 공백 허용
+                        rf'^\({re.escape(number_part)}\)$',  # (1) 괄호
+                        rf'^\(\s*{re.escape(number_part)}\s*\)$',  # ( 1 ) 공백 허용
+                        rf'^\[{re.escape(number_part)}\][.,:\s]*$',  # [1]. 뒤에 구두점
+                        rf'^\({re.escape(number_part)}\)[.,:\s]*$',  # (1). 뒤에 구두점
+                        rf'^{re.escape(number_part)}\]$',  # 1] - OCR이 [ 누락
+                        rf'^\[{re.escape(number_part)}$',  # [1 - OCR이 ] 누락
+                    ]
+
+                    for (bbox, text, confidence) in ocr_results:
+                        if confidence < 0.3:  # 대괄호는 신뢰도 높게 인식됨
+                            continue
+
+                        text_clean = text.strip()
+
+                        # 정확한 패턴 매칭
+                        for pattern in exact_patterns:
+                            if re.match(pattern, text_clean, re.IGNORECASE):
+                                x0 = int(min(point[0] for point in bbox))
+                                y0 = int(min(point[1] for point in bbox))
+                                x1 = int(max(point[0] for point in bbox))
+                                y1 = int(max(point[1] for point in bbox))
+
+                                center_x = (x0 + x1) // 2
+                                center_y = (y0 + y1) // 2
+
+                                results.append({
+                                    "x": center_x,
+                                    "y": center_y,
+                                    "bbox": (x0, y0, x1, y1),
+                                    "text": text_clean,
+                                    "confidence": confidence
+                                })
+                                print(f"    ✓ 화살표 마커 정확 매칭: '{search_text}' -> '{text_clean}' (신뢰도: {confidence:.2f})")
+                                break
+
+                    # 정확한 매칭이 없으면 부분 매칭 시도
+                    if not results:
+                        print(f"    ⚠️ 정확한 매칭 없음, 부분 매칭 시도...")
+                        for (bbox, text, confidence) in ocr_results:
+                            if confidence < 0.4:
+                                continue
+
+                            text_clean = text.strip()
+                            # 텍스트가 짧고 (8자 이하)
+                            if len(text_clean) <= 8:
+                                # 대괄호/괄호가 있고 숫자가 정확히 일치
+                                has_bracket = any(c in text_clean for c in ['[', ']', '(', ')'])
+                                has_number = re.search(rf'(?<![0-9]){re.escape(number_part)}(?![0-9])', text_clean)
+
+                                if has_bracket and has_number:
+                                    x0 = int(min(point[0] for point in bbox))
+                                    y0 = int(min(point[1] for point in bbox))
+                                    x1 = int(max(point[0] for point in bbox))
+                                    y1 = int(max(point[1] for point in bbox))
+
+                                    center_x = (x0 + x1) // 2
+                                    center_y = (y0 + y1) // 2
+
+                                    results.append({
+                                        "x": center_x,
+                                        "y": center_y,
+                                        "bbox": (x0, y0, x1, y1),
+                                        "text": text_clean,
+                                        "confidence": confidence
+                                    })
+                                    print(f"    ✓ 화살표 마커 부분 매칭: '{search_text}' -> '{text_clean}' (신뢰도: {confidence:.2f})")
+
+                elif is_star_pattern:
                     # 숫자 부분 추출 (예: "★1" -> "1", "★12" -> "12")
                     number_part = search_text[1:]
 
@@ -755,10 +848,12 @@ class KeywordMarker:
             print(f"    📊 {len(results)}개 매칭 중 신뢰도 최고: '{results[0]['text']}' (신뢰도: {results[0]['confidence']:.2f})")
             results = [results[0]]  # 가장 높은 신뢰도 것만 반환
 
-        # ★숫자 패턴 결과 로깅 (블록 밖에서 변수 확인)
-        is_star_pattern_check = search_text.startswith("★") or search_text.startswith("☆")
-        if is_star_pattern_check and not results:
-            print(f"    ⚠️ 화살표 마커 '{search_text}'를 찾지 못함 (마커 색상이 배경과 대비되는지 확인하세요)")
+        # 마커 패턴 결과 로깅
+        is_marker_pattern = is_bracket_pattern if 'is_bracket_pattern' in dir() else False
+        is_star_check = search_text.startswith("★") or search_text.startswith("☆")
+        if (is_marker_pattern or is_star_check) and not results:
+            print(f"    ⚠️ 화살표 마커 '{search_text}'를 찾지 못함")
+            print(f"    💡 권장: PPT에서 [1], [2] 형식 사용 (24pt 이상, Bold, 배경과 대비되는 색상)")
 
         return results
 
