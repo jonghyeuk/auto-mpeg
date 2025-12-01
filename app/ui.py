@@ -100,6 +100,34 @@ class GradioUI:
 
         return arrow_pointers
 
+    def _get_arrow_keywords_instruction(self, custom_request):
+        """
+        화살표 포인터 키워드를 대본에 포함시키라는 지시문 생성
+
+        Args:
+            custom_request: 사용자 요청사항
+
+        Returns:
+            str: Claude에게 전달할 지시문 (키워드가 없으면 빈 문자열)
+        """
+        parsed_arrows = self.parse_arrow_pointers(custom_request)
+
+        if not parsed_arrows:
+            return ""
+
+        keywords = [arrow["keyword"] for arrow in parsed_arrows]
+        keywords_str = ", ".join(f'"{kw}"' for kw in keywords)
+
+        return f'''
+【⚠️ 필수 포함 키워드 - 화살표 애니메이션용】
+다음 키워드들을 대본에 **반드시 자연스럽게 포함**해주세요 (화살표가 해당 단어에 맞춰 나타납니다):
+{keywords_str}
+
+- 각 키워드는 대본에서 **정확히 그 단어 그대로** 언급되어야 합니다
+- 자연스러운 문맥에서 해당 단어를 사용하세요
+- 예: "보트"를 포함해야 한다면 → "진공 챔버 안에 있는 보트에 재료를 담아..."
+'''
+
     def count_slides(self, pptx_file):
         """
         PPT 파일의 슬라이드 개수를 빠르게 카운트
@@ -399,7 +427,7 @@ class GradioUI:
 
 {f'''【사용자 요청사항】
 {custom_request}
-''' if custom_request and custom_request.strip() else ''}
+''' if custom_request and custom_request.strip() else ''}{self._get_arrow_keywords_instruction(custom_request)}
 【중요: 자연스러운 설명 방식】
 
 ❌ 절대 하지 말아야 할 것:
