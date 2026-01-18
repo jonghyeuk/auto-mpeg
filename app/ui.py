@@ -838,15 +838,19 @@ class GradioUI:
             context_analysis, log_output = self.analyze_ppt_context(slides, progress)
             yield log_output, "", gr.update(interactive=False)
 
-            # 시간 계획
+            # 시간 계획 (TTS pause_duration 고려)
+            PAUSE_DURATION = 0.7  # TTS에서 슬라이드당 추가되는 무음 시간
             total_duration_seconds = total_duration_minutes * 60
-            slides_per_duration = total_duration_seconds / len(slides)
+            pause_total = PAUSE_DURATION * len(slides)  # 전체 무음 시간
+            speech_duration = total_duration_seconds - pause_total  # 실제 대본 시간
+            slides_per_duration = speech_duration / len(slides)  # 슬라이드당 대본 시간
 
             log_output = self.log("", log_output)
             log_output = self.log("⏱️  영상 시간 계획:", log_output)
             log_output = self.log(f"  - 전체 목표 시간: {total_duration_minutes}분 ({total_duration_seconds}초)", log_output)
             log_output = self.log(f"  - 슬라이드 수: {len(slides)}개", log_output)
-            log_output = self.log(f"  - 슬라이드당 평균: {slides_per_duration:.1f}초", log_output)
+            log_output = self.log(f"  - 슬라이드 간 무음: {PAUSE_DURATION}초 × {len(slides)} = {pause_total:.1f}초", log_output)
+            log_output = self.log(f"  - 슬라이드당 대본 시간: {slides_per_duration:.1f}초", log_output)
             yield log_output, "", gr.update(interactive=False)
 
             # 대본 생성
@@ -1126,7 +1130,7 @@ class GradioUI:
             log_output = self.log("", log_output)
             log_output = self.log("📊 최종 결과:", log_output)
             log_output = self.log(f"  • 슬라이드 수: {len(scripts_data)}개", log_output)
-            log_output = self.log(f"  • 총 길이: {total_duration:.1f}초", log_output)
+            log_output = self.log(f"  • 총 길이: {total_duration:.1f}초 ({total_duration/60:.1f}분)", log_output)
             log_output = self.log(f"  • 해상도: {resolution_choice}", log_output)
             log_output = self.log(f"  • 음성: {voice_choice}", log_output)
             log_output = self.log(f"  • 파일 크기: {file_size_mb:.1f} MB", log_output)
@@ -1366,15 +1370,19 @@ class GradioUI:
             context_analysis, log_output = self.analyze_ppt_context(slides, progress)
             yield log_output, None, scripts_formatted
 
-            # 각 슬라이드당 시간 계산
+            # 각 슬라이드당 시간 계산 (TTS pause_duration 고려)
+            PAUSE_DURATION = 0.7  # TTS에서 슬라이드당 추가되는 무음 시간
             total_duration_seconds = total_duration_minutes * 60
-            slides_per_duration = total_duration_seconds / len(slides)
+            pause_total = PAUSE_DURATION * len(slides)  # 전체 무음 시간
+            speech_duration = total_duration_seconds - pause_total  # 실제 대본 시간
+            slides_per_duration = speech_duration / len(slides)  # 슬라이드당 대본 시간
 
             log_output = self.log("", log_output)
             log_output = self.log("⏱️  영상 시간 계획:", log_output)
             log_output = self.log(f"  - 전체 목표 시간: {total_duration_minutes}분 ({total_duration_seconds}초)", log_output)
             log_output = self.log(f"  - 슬라이드 수: {len(slides)}개", log_output)
-            log_output = self.log(f"  - 슬라이드당 평균: {slides_per_duration:.1f}초", log_output)
+            log_output = self.log(f"  - 슬라이드 간 무음: {PAUSE_DURATION}초 × {len(slides)} = {pause_total:.1f}초", log_output)
+            log_output = self.log(f"  - 슬라이드당 대본 시간: {slides_per_duration:.1f}초", log_output)
             log_output = self.log("", log_output)
             yield log_output, None, scripts_formatted
 
@@ -1756,11 +1764,27 @@ class GradioUI:
             log_output = self.log("", log_output)
             log_output = self.log("📊 최종 결과:", log_output)
             log_output = self.log(f"  • 슬라이드 수: {len(slides)}개", log_output)
-            log_output = self.log(f"  • 총 길이: {total_duration:.1f}초", log_output)
+            log_output = self.log(f"  • 총 길이: {total_duration:.1f}초 ({total_duration/60:.1f}분)", log_output)
             log_output = self.log(f"  • 해상도: {resolution_choice}", log_output)
             log_output = self.log(f"  • 음성: {voice_choice}", log_output)
             log_output = self.log(f"  • 파일 크기: {file_size_mb:.1f} MB", log_output)
             log_output = self.log(f"  • 출력 파일: {final_video.name}", log_output)
+
+            # 목표 시간 vs 실제 시간 검증
+            target_seconds = total_duration_minutes * 60
+            difference = total_duration - target_seconds
+            difference_percent = (difference / target_seconds) * 100
+
+            log_output = self.log("", log_output)
+            log_output = self.log("⏱️  시간 검증:", log_output)
+            log_output = self.log(f"  • 목표: {total_duration_minutes}분 ({target_seconds}초)", log_output)
+            log_output = self.log(f"  • 실제: {total_duration/60:.1f}분 ({total_duration:.1f}초)", log_output)
+            if abs(difference) < 10:
+                log_output = self.log(f"  ✓ 목표 시간에 근접합니다 (차이: {difference:+.1f}초)", log_output)
+            elif difference > 0:
+                log_output = self.log(f"  ⚠️ 목표보다 {difference:.1f}초 깁니다 ({difference_percent:+.1f}%)", log_output)
+            else:
+                log_output = self.log(f"  ⚠️ 목표보다 {abs(difference):.1f}초 짧습니다 ({difference_percent:.1f}%)", log_output)
 
             yield log_output, str(final_video), scripts_formatted
 
