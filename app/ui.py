@@ -425,8 +425,12 @@ class GradioUI:
 {slide.get('body', '')}
 {f"발표자 노트: {slide.get('notes', '')}" if slide.get('notes') else ''}
 
-{f'''【사용자 요청사항】
-{custom_request}
+{f'''⚠️ 【사용자 요청사항 - 반드시 준수】 ⚠️
+다음 요청사항을 대본 작성 시 **최우선으로 반영**하세요:
+
+"{custom_request}"
+
+위 요청사항에 맞춰 설명 스타일, 어휘 수준, 강조점을 조정하세요.
 ''' if custom_request and custom_request.strip() else ''}{self._get_arrow_keywords_instruction(custom_request)}
 【중요: 자연스러운 설명 방식】
 
@@ -446,9 +450,11 @@ class GradioUI:
 - ❌ 나쁜 예: "반도체 8대 공정에 대해 알아보겠습니다"
 - ✅ 좋은 예: "반도체 하나가 만들어지려면 여덟 가지 핵심 과정을 거쳐야 하는데요"
 
-【형식 요구사항】
+【형식 요구사항 - ⚠️ 글자 수 엄격 준수 ⚠️】
 - 자연스러운 구어체 (강의실에서 말하듯이)
-- 정확히 {target_duration}초 분량 (약 {int(target_duration * 3.5)}자 내외)
+- ⚠️ **반드시** {target_duration}초 분량 = **정확히 {int(target_duration * 4)}자** (±10자 이내)
+- TTS 속도: 초당 4글자 기준 (한국어)
+- 글자 수가 부족하면 예시/비유 추가, 초과하면 핵심만 남기기
 
 먼저 <thinking> 태그 안에:
 1. 이 슬라이드에서 학생들이 꼭 이해해야 할 핵심 내용
@@ -475,8 +481,9 @@ class GradioUI:
 - 강조 문구는 짧고 임팩트 있게 (5~15자)
 - 대본에서 해당 문구가 언급되는 시점에 맞춰 시점 지정
 
-마지막으로 <script> 태그 안에 **정확히 {int(target_duration * 3.5)}자 내외**로
-마치 강의실에서 학생들에게 설명하듯이 자연스러운 구어체 강의 대본을 작성해주세요."""
+마지막으로 <script> 태그 안에 **정확히 {int(target_duration * 4)}자** (±10자)로
+마치 강의실에서 학생들에게 설명하듯이 자연스러운 구어체 강의 대본을 작성해주세요.
+⚠️ 글자 수를 반드시 지켜주세요! TTS 영상 길이가 이에 따라 결정됩니다."""
 
             message = client.messages.create(
                 model=config.DEFAULT_LLM_MODEL,
@@ -624,22 +631,22 @@ class GradioUI:
             log_output = self.log("└─────────────────────────────────────────┘", log_output)
             log_output = self.log("", log_output)
 
-            # 검증
+            # 검증 (TTS 속도: 초당 4글자 기준)
             log_output = self.log("✅ 대본 검증:", log_output)
             word_count = len(script)
-            expected_chars = int(target_duration * 3.5)
-            estimated_duration = word_count / 3.5
+            expected_chars = int(target_duration * 4)  # 초당 4글자
+            estimated_duration = word_count / 4.0  # 초당 4글자
 
             log_output = self.log(f"  - 글자 수: {word_count}자 (목표: {expected_chars}자)", log_output)
             log_output = self.log(f"  - 예상 시간: {estimated_duration:.1f}초 (목표: {target_duration}초)", log_output)
 
-            # 목표 시간의 ±30% 이내면 OK
-            if estimated_duration < target_duration * 0.7:
-                log_output = self.log(f"  ⚠️  너무 짧습니다 ({estimated_duration:.1f}초 < {target_duration * 0.7:.1f}초)", log_output)
-            elif estimated_duration > target_duration * 1.3:
-                log_output = self.log(f"  ⚠️  너무 깁니다 ({estimated_duration:.1f}초 > {target_duration * 1.3:.1f}초)", log_output)
+            # 목표 시간의 ±20% 이내면 OK (더 엄격하게)
+            if estimated_duration < target_duration * 0.8:
+                log_output = self.log(f"  ⚠️  너무 짧습니다 ({estimated_duration:.1f}초 < {target_duration * 0.8:.1f}초)", log_output)
+            elif estimated_duration > target_duration * 1.2:
+                log_output = self.log(f"  ⚠️  너무 깁니다 ({estimated_duration:.1f}초 > {target_duration * 1.2:.1f}초)", log_output)
             else:
-                log_output = self.log(f"  ✓ 목표 시간에 적합합니다 (±30% 이내)", log_output)
+                log_output = self.log(f"  ✓ 목표 시간에 적합합니다 (±20% 이내)", log_output)
 
             log_output = self.log("", log_output)
 
@@ -821,10 +828,10 @@ class GradioUI:
                         </div>
                     </div>
                     '''
-                    yield log_output, None, output_path, html_info
+                    yield log_output, None, output_path, html_info, ""
                 else:
                     # MP4 모드: 기존 비디오 출력
-                    yield log_output, output_path, None, None
+                    yield log_output, output_path, None, None, ""
         else:
             # 기존 모드: 기본 워크플로우
             for result in self.convert_ppt_to_video(
@@ -844,11 +851,13 @@ class GradioUI:
                 encoding_speed=encoding_speed,
                 progress=progress
             ):
-                # 기존 모드는 (log, video) 반환 -> (log, video, None, None)으로 확장
-                if isinstance(result, tuple) and len(result) == 2:
-                    yield result[0], result[1], None, None
+                # 기존 모드는 (log, video, scripts) 반환 -> (log, video, None, None, scripts)로 확장
+                if isinstance(result, tuple) and len(result) == 3:
+                    yield result[0], result[1], None, None, result[2]
+                elif isinstance(result, tuple) and len(result) == 2:
+                    yield result[0], result[1], None, None, ""
                 else:
-                    yield result, None, None, None
+                    yield result, None, None, None, ""
 
     def convert_ppt_to_video(
         self,
@@ -876,6 +885,7 @@ class GradioUI:
             enable_text_animation: 텍스트 애니메이션 사용 여부
         """
         log_output = ""
+        scripts_formatted = ""  # 대본 표시용
 
         try:
             # 의존성 체크
@@ -888,15 +898,15 @@ class GradioUI:
                 log_output = self.log("", log_output)
                 log_output = self.log("⚠️  일부 기능이 제한될 수 있습니다", log_output)
                 log_output = self.log("", log_output)
-                yield log_output, None
+                yield log_output, None, scripts_formatted
             else:
                 log_output = self.log("✅ 모든 의존성이 정상입니다", log_output)
                 log_output = self.log("", log_output)
-                yield log_output, None
+                yield log_output, None, scripts_formatted
 
             if pptx_file is None:
                 log_output = self.log("❌ PPT 파일을 업로드해주세요.", log_output)
-                yield log_output, None
+                yield log_output, None, scripts_formatted
                 return
 
             if not output_name or output_name.strip() == "":
@@ -935,7 +945,7 @@ class GradioUI:
             log_output = self.log(f"📄 STEP 1: {file_type} 파싱", log_output)
             log_output = self.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", log_output)
             log_output = self.log("", log_output)
-            yield log_output, None
+            yield log_output, None, scripts_formatted
 
             # 파일 확장자에 따라 적절한 Parser 선택
             if file_ext == ".pdf":
@@ -952,13 +962,13 @@ class GradioUI:
                 log_output = self.log(f"✅ PPT 파싱 완료: {len(slides)}개 슬라이드", log_output)
 
             log_output = self.log("", log_output)
-            yield log_output, None
+            yield log_output, None, scripts_formatted
 
             # PPT → 이미지 변환 (PPTX만 해당)
             if file_ext == ".pptx":
                 progress(0.1, desc="PPT → 이미지 변환 중...")
                 log_output = self.log("🖼️  PPT → PNG 이미지 변환 중...", log_output)
-                yield log_output, None
+                yield log_output, None, scripts_formatted
 
                 try:
                     convert_pptx_to_images(pptx_path, config.SLIDES_IMG_DIR)
@@ -969,18 +979,18 @@ class GradioUI:
                     log_output = self.log("💡 해결 방법:", log_output)
                     log_output = self.log("  1. LibreOffice를 설치하세요", log_output)
                     log_output = self.log("     https://www.libreoffice.org/download/download/", log_output)
-                    yield log_output, None
+                    yield log_output, None, scripts_formatted
             else:
                 # PDF는 이미 파싱 단계에서 이미지로 변환됨
                 log_output = self.log("✅ PDF는 이미 이미지로 변환됨", log_output)
 
             log_output = self.log("", log_output)
-            yield log_output, None
+            yield log_output, None, scripts_formatted
 
             # ===== STEP 2: 전체 맥락 분석 =====
             progress(0.15, desc="전체 맥락 분석 중...")
             context_analysis, log_output = self.analyze_ppt_context(slides, progress)
-            yield log_output, None
+            yield log_output, None, scripts_formatted
 
             # 각 슬라이드당 시간 계산
             total_duration_seconds = total_duration_minutes * 60
@@ -992,7 +1002,7 @@ class GradioUI:
             log_output = self.log(f"  - 슬라이드 수: {len(slides)}개", log_output)
             log_output = self.log(f"  - 슬라이드당 평균: {slides_per_duration:.1f}초", log_output)
             log_output = self.log("", log_output)
-            yield log_output, None
+            yield log_output, None, scripts_formatted
 
             # ===== STEP 3: AI 대본 생성 (상세 버전) =====
             progress(0.2, desc="AI 대본 생성 중...")
@@ -1000,7 +1010,7 @@ class GradioUI:
             log_output = self.log("🤖 STEP 2: AI 대본 생성 (Claude 사고 과정 포함)", log_output)
             log_output = self.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", log_output)
             log_output = self.log("", log_output)
-            yield log_output, None
+            yield log_output, None, scripts_formatted
 
             scripts_data = []
 
@@ -1063,7 +1073,7 @@ class GradioUI:
             # 병렬 처리 (최대 4개 워커)
             max_workers = min(4, len(slides))
             log_output = self.log(f"⚡ 병렬 처리 시작 (워커: {max_workers}개, 슬라이드: {len(slides)}개)", log_output)
-            yield log_output, None
+            yield log_output, None, scripts_formatted
 
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 # 모든 슬라이드 처리 작업 제출
@@ -1078,7 +1088,7 @@ class GradioUI:
                     progress_pct = 0.2 + (0.4 * completed_count[0] / len(slides))
                     progress(progress_pct, desc=f"대본 생성 중... ({completed_count[0]}/{len(slides)})")
                     log_output = self.log(f"  ✓ 슬라이드 {slide_idx + 1} 완료", log_output)
-                    yield log_output, None
+                    yield log_output, None, scripts_formatted
 
             # 결과를 슬라이드 순서대로 정렬하여 scripts_data에 추가
             for i in range(len(slides)):
@@ -1090,7 +1100,7 @@ class GradioUI:
             for i in range(len(slides)):
                 if i in all_logs and all_logs[i]:
                     log_output = self.log(all_logs[i], log_output)
-            yield log_output, None
+            yield log_output, None, scripts_formatted
 
             # 대본 저장
             with open(scripts_json, 'w', encoding='utf-8') as f:
@@ -1107,7 +1117,14 @@ class GradioUI:
                 if first_keywords:
                     log_output = self.log(f"  - 첫 번째 키워드: {[k['text'] for k in first_keywords]}", log_output)
             log_output = self.log("", log_output)
-            yield log_output, None
+
+            # 대본 포맷팅 (UI 표시용)
+            scripts_formatted = ""
+            for i, script_item in enumerate(scripts_data):
+                scripts_formatted += f"━━━ 슬라이드 {i+1} ━━━\n"
+                scripts_formatted += f"{script_item.get('script', '')}\n\n"
+
+            yield log_output, None, scripts_formatted, scripts_formatted
 
             # ===== STEP 4: TTS 생성 =====
             progress(0.6, desc="TTS 음성 생성 중...")
@@ -1115,7 +1132,7 @@ class GradioUI:
             log_output = self.log(f"🔊 STEP 3: TTS 음성 생성 (음성: {voice_choice})", log_output)
             log_output = self.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", log_output)
             log_output = self.log("", log_output)
-            yield log_output, None
+            yield log_output, None, scripts_formatted
 
             tts = TTSClient(
                 provider=config.TTS_PROVIDER,
@@ -1192,7 +1209,7 @@ class GradioUI:
                 log_output = self.log(f"  ✓ 타이밍 조정 불필요 (예상과 실제 길이 유사)", log_output)
 
             log_output = self.log("", log_output)
-            yield log_output, None
+            yield log_output, None, scripts_formatted
 
             # ===== STEP 4.5: 자막 생성 (선택적) =====
             subtitle_file = None
@@ -1201,7 +1218,7 @@ class GradioUI:
                 log_output = self.log("📝 자막 생성 중...", log_output)
                 log_output = self.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", log_output)
                 log_output = self.log("", log_output)
-                yield log_output, None
+                yield log_output, None, scripts_formatted
 
                 try:
                     subtitle_generator = SubtitleGenerator()
@@ -1259,14 +1276,14 @@ class GradioUI:
                         subtitle_file = None
 
                     log_output = self.log("", log_output)
-                    yield log_output, None
+                    yield log_output, None, scripts_formatted
 
                 except Exception as e:
                     log_output = self.log(f"⚠️  자막 생성 중 오류: {str(e)}", log_output)
                     log_output = self.log("→ 자막 없이 진행합니다", log_output)
                     log_output = self.log("", log_output)
                     subtitle_file = None
-                    yield log_output, None
+                    yield log_output, None, scripts_formatted
 
             # ===== STEP 5: 영상 렌더링 =====
             progress(0.75, desc="영상 렌더링 중...")
@@ -1274,7 +1291,7 @@ class GradioUI:
             log_output = self.log(f"🎬 STEP 4: 영상 렌더링 ({resolution_choice})", log_output)
             log_output = self.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", log_output)
             log_output = self.log("", log_output)
-            yield log_output, None
+            yield log_output, None, scripts_formatted
 
             # 화살표 마커(★1, ★2 등) 영역을 슬라이드 이미지에서 제거
             # (영상에서 마커가 보이지 않도록)
@@ -1306,7 +1323,7 @@ class GradioUI:
             if marker_removal_count > 0:
                 log_output = self.log(f"🧹 화살표 마커 {marker_removal_count}개 제거 완료 (영상에서 숨김)", log_output)
                 log_output = self.log("", log_output)
-                yield log_output, None
+                yield log_output, None, scripts_formatted
 
             # 영상 품질 매핑 (CRF: 낮을수록 고품질)
             quality_map = {"high": 18, "medium": 23, "low": 28}
@@ -1350,7 +1367,7 @@ class GradioUI:
                 log_output = self.log("  1. 슬라이드 이미지 파일이 없음", log_output)
                 log_output = self.log("  2. FFmpeg 설치 필요", log_output)
                 log_output = self.log("  3. 파일 권한 문제", log_output)
-                yield log_output, None
+                yield log_output, None, scripts_formatted
                 return
 
             # 완료
@@ -1371,7 +1388,7 @@ class GradioUI:
             log_output = self.log(f"  • 파일 크기: {file_size_mb:.1f} MB", log_output)
             log_output = self.log(f"  • 출력 파일: {final_video.name}", log_output)
 
-            yield log_output, str(final_video)
+            yield log_output, str(final_video), scripts_formatted
 
         except Exception as e:
             error_msg = f"\n\n❌ 오류 발생: {str(e)}\n\n상세 정보는 터미널을 확인하세요."
@@ -1379,7 +1396,7 @@ class GradioUI:
             print(f"Error: {e}")
             import traceback
             traceback.print_exc()
-            yield log_output, None
+            yield log_output, None, scripts_formatted
 
     def create_interface(self):
         """Gradio 인터페이스 생성"""
@@ -1586,6 +1603,18 @@ class GradioUI:
                         visible=True
                     )
 
+            # 대본 보기 영역
+            with gr.Row():
+                with gr.Column():
+                    gr.Markdown("### 📝 생성된 대본")
+                    script_output = gr.Textbox(
+                        label="슬라이드별 대본 (TTS가 읽을 내용)",
+                        lines=15,
+                        max_lines=20,
+                        show_copy_button=True,
+                        placeholder="영상 생성 후 대본이 여기에 표시됩니다..."
+                    )
+
             # PPT 업로드 시 슬라이드 개수 분석 및 영상 길이 옵션 업데이트
             def update_duration_options(pptx_file):
                 """PPT 업로드 시 슬라이드 개수에 따라 영상 길이 옵션 업데이트"""
@@ -1653,7 +1682,7 @@ class GradioUI:
                     video_quality,
                     encoding_speed
                 ],
-                outputs=[progress_output, video_output, zip_download, html_preview]
+                outputs=[progress_output, video_output, zip_download, html_preview, script_output]
             )
 
             gr.Markdown(
@@ -1700,7 +1729,7 @@ def main():
     print("🚀 PPT to Video Converter - Gradio UI (상세 버전)")
     print("=" * 60)
     print()
-    print("브라우저에서 http://localhost:7861 으로 접속하세요")
+    print("브라우저에서 http://localhost:7863 으로 접속하세요")
     print("종료하려면 Ctrl+C를 누르세요")
     print()
 
