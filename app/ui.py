@@ -1700,7 +1700,7 @@ def main():
     print("🚀 PPT to Video Converter - Gradio UI (상세 버전)")
     print("=" * 60)
     print()
-    print("브라우저에서 http://localhost:7861 으로 접속하세요")
+    print("브라우저에서 http://localhost:7863 으로 접속하세요")
     print("종료하려면 Ctrl+C를 누르세요")
     print()
 
