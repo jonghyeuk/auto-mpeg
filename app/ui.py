@@ -1074,28 +1074,41 @@ class GradioUI:
             yield log_output, None, None, None
 
             from app.modules.ffmpeg_renderer import FFmpegRenderer
-            renderer = FFmpegRenderer(resolution=resolution_choice)
+
+            # 해상도 파싱
+            width, height = map(int, resolution_choice.split('x'))
 
             quality_map = {"high": 18, "medium": 23, "low": 28}
             crf = quality_map.get(video_quality, 23)
+
+            renderer = FFmpegRenderer(width=width, height=height, crf=crf, preset=encoding_speed)
+
             log_output = self.log(f"  - 영상 품질: {video_quality} (CRF: {crf})", log_output)
             log_output = self.log(f"  - 인코딩 속도: {encoding_speed}", log_output)
             log_output = self.log(f"  - 전환 효과: {transition_effect} ({transition_duration}초)", log_output)
             yield log_output, None, None, None
 
-            final_video = renderer.render(
-                slides_dir=config.SLIDES_IMG_DIR,
-                audio_meta=audio_meta,
-                scripts_data=scripts_data,
-                output_path=config.OUTPUT_DIR / f"{output_name}.mp4",
-                transition_type=transition_effect,
+            # 출력 경로 설정
+            slides_json = config.META_DIR / "slides.json"
+            final_video_path = config.OUTPUT_DIR / f"{output_name}.mp4"
+            subtitle_file = config.OUTPUT_DIR / f"{output_name}.srt" if enable_subtitles else None
+
+            success = renderer.render_video(
+                slides_json,
+                audio_meta_json,
+                config.SLIDES_IMG_DIR,
+                config.AUDIO_DIR,
+                config.CLIPS_DIR,
+                final_video_path,
+                scripts_json_path=scripts_json,
+                enable_keyword_marking=False,
+                transition_effect=transition_effect,
                 transition_duration=float(transition_duration),
-                crf=crf,
-                preset=encoding_speed,
-                burn_subtitles=enable_subtitles,
-                subtitle_path=config.OUTPUT_DIR / f"{output_name}.srt" if enable_subtitles else None,
+                subtitle_file=subtitle_file,
                 subtitle_font_size=int(subtitle_font_size)
             )
+
+            final_video = final_video_path if success else None
 
             if not final_video or not final_video.exists():
                 log_output = self.log("❌ 영상 렌더링 실패", log_output)
