@@ -815,10 +815,10 @@ class GradioUI:
             yield log_output, "", gr.update(interactive=False)
 
             from app.modules.ppt_parser import PPTParser
-            parser = PPTParser()
 
             # PPT 파싱 (PDF 또는 PPTX)
             pptx_path = Path(pptx_file.name if hasattr(pptx_file, 'name') else pptx_file)
+            slides_json = config.META_DIR / "slides.json"
 
             if pptx_path.suffix.lower() == '.pdf':
                 from app.modules.pdf_parser import PDFParser
@@ -826,7 +826,8 @@ class GradioUI:
                 slides = pdf_parser.parse(pptx_path, config.SLIDES_IMG_DIR)
                 self.current_pdf_path = pptx_path
             else:
-                slides = parser.parse(pptx_path, config.SLIDES_IMG_DIR)
+                parser = PPTParser(str(pptx_path))
+                slides = parser.parse(slides_json, config.SLIDES_IMG_DIR)
                 self.current_pdf_path = None
 
             log_output = self.log(f"📊 총 {len(slides)}개 슬라이드 발견", log_output)
