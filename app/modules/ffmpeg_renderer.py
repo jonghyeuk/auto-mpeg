@@ -246,15 +246,18 @@ class FFmpegRenderer:
                 # 오버레이/하이라이트 없음: 포맷 변환만 수행
                 cmd.extend(["-vf", "format=yuv420p"])
 
-            # 공통 인코딩 옵션
+            # 공통 인코딩 옵션 (Windows Media Player 호환)
             cmd.extend([
                 "-c:v", "libx264",  # 비디오 코덱
+                "-profile:v", "main",  # H.264 프로파일 (호환성)
+                "-level", "4.0",  # H.264 레벨 (1080p 지원)
                 "-preset", self.preset,  # 인코딩 속도
                 "-crf", str(self.crf),  # 품질
                 "-c:a", "aac",  # 오디오 코덱
                 "-b:a", "192k",  # 오디오 비트레이트
                 "-ar", "44100",  # 샘플레이트
                 "-pix_fmt", "yuv420p",  # 픽셀 포맷
+                "-movflags", "+faststart",  # 웹 스트리밍 최적화
                 "-t", str(duration),  # 영상 길이
                 "-shortest",  # 짧은 입력에 맞춤
                 str(output_path)
@@ -445,9 +448,13 @@ class FFmpegRenderer:
                 "-map", "[outv]",
                 "-map", "[outa]",
                 "-c:v", "libx264",
+                "-profile:v", "main",  # H.264 프로파일 (호환성)
+                "-level", "4.0",  # H.264 레벨 (1080p 지원)
                 "-preset", self.preset,
                 "-crf", str(self.crf),
+                "-pix_fmt", "yuv420p",  # 픽셀 포맷
                 "-c:a", "aac",
+                "-movflags", "+faststart",  # 웹 스트리밍 최적화
                 str(output_path)
             ])
 
@@ -484,12 +491,19 @@ class FFmpegRenderer:
             temp_subtitle = input_video.parent / "temp_subtitle.srt"
             shutil.copy(str(subtitle_file), str(temp_subtitle))
 
-            # 방법 1: force_style로 한글 폰트 지정
+            # 방법 1: force_style로 한글 폰트 지정 (Windows 호환 인코딩)
             cmd = [
                 "ffmpeg",
                 "-i", str(input_video),
                 "-vf", f"subtitles={temp_subtitle.name}:force_style='FontName=Malgun Gothic,FontSize={font_size},PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BorderStyle=3,Outline=2,Shadow=1,MarginV=30'",
+                "-c:v", "libx264",  # 비디오 코덱
+                "-profile:v", "main",  # H.264 프로파일 (호환성)
+                "-level", "4.0",  # H.264 레벨
+                "-preset", "medium",
+                "-crf", "23",
+                "-pix_fmt", "yuv420p",
                 "-c:a", "copy",  # 오디오는 그대로 복사
+                "-movflags", "+faststart",  # 웹 스트리밍 최적화
                 "-y",
                 str(output_video)
             ]
