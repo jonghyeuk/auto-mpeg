@@ -767,6 +767,366 @@ class GradioUI:
             log_output = self.log("", log_output)
             return fallback_script, [], [], None, [], log_output
 
+    def generate_scripts_only(
+        self,
+        pptx_file,
+        output_name,
+        custom_request,
+        total_duration_minutes,
+        enable_keyword_marking,
+        keyword_mark_style,
+        progress=gr.Progress()
+    ):
+        """
+        1단계: PPT에서 대본만 생성 (TTS/영상 생성 없이)
+        """
+        import threading
+        log_output = ""
+
+        try:
+            # 의존성 체크
+            log_output = self.log("🔍 시스템 의존성 체크 중...", log_output)
+            issues = self.check_dependencies()
+
+            if issues:
+                for issue in issues:
+                    log_output = self.log(issue, log_output)
+                log_output = self.log("", log_output)
+
+            if pptx_file is None:
+                log_output = self.log("❌ PPT 파일을 업로드해주세요.", log_output)
+                yield log_output, "", gr.update(interactive=False)
+                return
+
+            if not output_name or output_name.strip() == "":
+                output_name = "output_video"
+
+            # float 변환
+            try:
+                total_duration_minutes = float(total_duration_minutes)
+            except:
+                total_duration_minutes = 5.0
+
+            # PPT 파싱
+            progress(0.1, desc="PPT 분석 중...")
+            log_output = self.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", log_output)
+            log_output = self.log("📂 STEP 1: PPT 파싱", log_output)
+            log_output = self.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", log_output)
+            yield log_output, "", gr.update(interactive=False)
+
+            from app.modules.ppt_parser import PPTParser
+            parser = PPTParser()
+
+            # PPT 파싱 (PDF 또는 PPTX)
+            pptx_path = Path(pptx_file.name if hasattr(pptx_file, 'name') else pptx_file)
+
+            if pptx_path.suffix.lower() == '.pdf':
+                from app.modules.pdf_parser import PDFParser
+                pdf_parser = PDFParser()
+                slides = pdf_parser.parse(pptx_path, config.SLIDES_IMG_DIR)
+                self.current_pdf_path = pptx_path
+            else:
+                slides = parser.parse(pptx_path, config.SLIDES_IMG_DIR)
+                self.current_pdf_path = None
+
+            log_output = self.log(f"📊 총 {len(slides)}개 슬라이드 발견", log_output)
+            yield log_output, "", gr.update(interactive=False)
+
+            # 맥락 분석
+            progress(0.15, desc="전체 맥락 분석 중...")
+            context_analysis, log_output = self.analyze_ppt_context(slides, progress)
+            yield log_output, "", gr.update(interactive=False)
+
+            # 시간 계획
+            total_duration_seconds = total_duration_minutes * 60
+            slides_per_duration = total_duration_seconds / len(slides)
+
+            log_output = self.log("", log_output)
+            log_output = self.log("⏱️  영상 시간 계획:", log_output)
+            log_output = self.log(f"  - 전체 목표 시간: {total_duration_minutes}분 ({total_duration_seconds}초)", log_output)
+            log_output = self.log(f"  - 슬라이드 수: {len(slides)}개", log_output)
+            log_output = self.log(f"  - 슬라이드당 평균: {slides_per_duration:.1f}초", log_output)
+            yield log_output, "", gr.update(interactive=False)
+
+            # 대본 생성
+            progress(0.2, desc="AI 대본 생성 중...")
+            log_output = self.log("", log_output)
+            log_output = self.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", log_output)
+            log_output = self.log("🤖 STEP 2: AI 대본 생성", log_output)
+            log_output = self.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", log_output)
+            yield log_output, "", gr.update(interactive=False)
+
+            scripts_data = []
+            pdf_file_path = getattr(self, 'current_pdf_path', None)
+
+            # 병렬 처리
+            results_lock = threading.Lock()
+            completed_count = [0]
+            all_results = {}
+            all_logs = {}
+
+            def process_slide(slide_info):
+                i, slide = slide_info
+                slide_image_path = config.SLIDES_IMG_DIR / f"slide_{slide['index']:03d}.png"
+                thread_marker = KeywordMarker(use_ocr=True)
+                thread_log = ""
+
+                script, keywords, keyword_overlays, highlight, arrow_pointers, thread_log = self.generate_script_with_thinking(
+                    slide, context_analysis, i + 1, len(slides), slides_per_duration,
+                    progress, thread_log, custom_request=custom_request,
+                    slide_image_path=slide_image_path if slide_image_path.exists() else None,
+                    pdf_path=pdf_file_path, page_num=i,
+                    enable_keyword_marking=enable_keyword_marking,
+                    keyword_mark_style=keyword_mark_style, keyword_marker=thread_marker
+                )
+
+                result = {
+                    "index": slide["index"],
+                    "script": script,
+                    "keywords": keywords,
+                    "keyword_overlays": keyword_overlays,
+                    "highlight": highlight,
+                    "arrow_pointers": arrow_pointers
+                }
+
+                with results_lock:
+                    all_results[i] = result
+                    all_logs[i] = thread_log
+                    completed_count[0] += 1
+
+                return i
+
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            max_workers = min(2, len(slides))
+            log_output = self.log(f"⚡ 병렬 처리 시작 (워커: {max_workers}개, 슬라이드: {len(slides)}개)", log_output)
+            yield log_output, "", gr.update(interactive=False)
+
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = {executor.submit(process_slide, (i, slide)): i for i, slide in enumerate(slides)}
+                for future in as_completed(futures):
+                    slide_idx = futures[future]
+                    progress_pct = 0.2 + (completed_count[0] / len(slides)) * 0.5
+                    progress(progress_pct, desc=f"대본 생성 중... ({completed_count[0]}/{len(slides)})")
+                    log_output = self.log(f"  ✓ 슬라이드 {slide_idx + 1} 완료", log_output)
+                    yield log_output, "", gr.update(interactive=False)
+
+            # 결과 정렬
+            for i in range(len(slides)):
+                scripts_data.append(all_results[i])
+
+            # 대본 저장
+            scripts_json = config.META_DIR / "scripts.json"
+            with open(scripts_json, 'w', encoding='utf-8') as f:
+                json.dump(scripts_data, f, ensure_ascii=False, indent=2)
+
+            log_output = self.log("", log_output)
+            log_output = self.log(f"💾 대본 저장 완료: {scripts_json}", log_output)
+
+            # 대본 포맷팅 (UI 표시용)
+            scripts_formatted = ""
+            for i, script_item in enumerate(scripts_data):
+                scripts_formatted += f"━━━ 슬라이드 {i+1} ━━━\n"
+                scripts_formatted += f"{script_item.get('script', '')}\n\n"
+
+            log_output = self.log("", log_output)
+            log_output = self.log("✅ 대본 생성 완료!", log_output)
+            log_output = self.log("", log_output)
+            log_output = self.log("👆 위 대본을 확인하고 필요하면 수정하세요.", log_output)
+            log_output = self.log("👉 수정 완료 후 '2단계: 영상 생성' 버튼을 클릭하세요.", log_output)
+
+            progress(0.7, desc="대본 생성 완료!")
+            yield log_output, scripts_formatted, gr.update(interactive=True)
+
+        except Exception as e:
+            error_msg = f"\n\n❌ 오류 발생: {str(e)}"
+            log_output = self.log(error_msg, log_output)
+            import traceback
+            traceback.print_exc()
+            yield log_output, "", gr.update(interactive=False)
+
+    def generate_video_from_scripts(
+        self,
+        pptx_file,
+        output_name,
+        scripts_text,
+        conversion_mode,
+        reactant_output_format,
+        voice_choice,
+        resolution_choice,
+        enable_subtitles,
+        subtitle_font_size,
+        transition_effect,
+        transition_duration,
+        video_quality,
+        encoding_speed,
+        progress=gr.Progress()
+    ):
+        """
+        2단계: 대본으로 TTS 생성 + 영상 렌더링
+        """
+        log_output = ""
+
+        try:
+            if not scripts_text or scripts_text.strip() == "":
+                log_output = self.log("❌ 대본이 없습니다. 먼저 '1단계: 대본 생성'을 실행하세요.", log_output)
+                yield log_output, None, None, None
+                return
+
+            if pptx_file is None:
+                log_output = self.log("❌ PPT 파일이 없습니다.", log_output)
+                yield log_output, None, None, None
+                return
+
+            if not output_name or output_name.strip() == "":
+                output_name = "output_video"
+
+            # 대본 텍스트 파싱 (UI에서 수정된 대본 반영)
+            scripts_data = []
+            current_slide = None
+            current_script = ""
+
+            for line in scripts_text.split('\n'):
+                if line.startswith('━━━ 슬라이드'):
+                    if current_slide is not None and current_script.strip():
+                        scripts_data.append({
+                            "index": current_slide,
+                            "script": current_script.strip(),
+                            "keywords": [],
+                            "keyword_overlays": [],
+                            "highlight": None,
+                            "arrow_pointers": []
+                        })
+                    # 슬라이드 번호 추출
+                    import re
+                    match = re.search(r'슬라이드\s*(\d+)', line)
+                    if match:
+                        current_slide = int(match.group(1))
+                    current_script = ""
+                else:
+                    current_script += line + "\n"
+
+            # 마지막 슬라이드 추가
+            if current_slide is not None and current_script.strip():
+                scripts_data.append({
+                    "index": current_slide,
+                    "script": current_script.strip(),
+                    "keywords": [],
+                    "keyword_overlays": [],
+                    "highlight": None,
+                    "arrow_pointers": []
+                })
+
+            if not scripts_data:
+                log_output = self.log("❌ 대본 파싱 실패. 형식을 확인하세요.", log_output)
+                yield log_output, None, None, None
+                return
+
+            log_output = self.log(f"📝 {len(scripts_data)}개 슬라이드 대본 확인", log_output)
+
+            # 대본 저장 (수정된 버전)
+            scripts_json = config.META_DIR / "scripts.json"
+            with open(scripts_json, 'w', encoding='utf-8') as f:
+                json.dump(scripts_data, f, ensure_ascii=False, indent=2)
+
+            # TTS 생성
+            progress(0.3, desc="TTS 음성 생성 중...")
+            log_output = self.log("", log_output)
+            log_output = self.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", log_output)
+            log_output = self.log(f"🔊 STEP 3: TTS 음성 생성 (음성: {voice_choice})", log_output)
+            log_output = self.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", log_output)
+            yield log_output, None, None, None
+
+            audio_meta_json = config.META_DIR / "audio_meta.json"
+            tts = TTSClient(
+                provider=config.TTS_PROVIDER,
+                api_key=config.OPENAI_API_KEY,
+                voice=voice_choice
+            )
+
+            audio_meta = tts.generate_audio(scripts_json, config.AUDIO_DIR, audio_meta_json)
+            total_duration = sum(item['duration'] for item in audio_meta)
+
+            log_output = self.log(f"✅ TTS 생성 완료: {len(audio_meta)}개 오디오 ({total_duration:.1f}초)", log_output)
+            yield log_output, None, None, None
+
+            # 자막 생성
+            if enable_subtitles:
+                progress(0.5, desc="자막 생성 중...")
+                log_output = self.log("", log_output)
+                log_output = self.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", log_output)
+                log_output = self.log("📝 자막 생성 중...", log_output)
+                log_output = self.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", log_output)
+                yield log_output, None, None, None
+
+                from app.modules.subtitle_generator import SubtitleGenerator
+                subtitle_gen = SubtitleGenerator()
+                srt_path = config.OUTPUT_DIR / f"{output_name}.srt"
+                subtitle_gen.generate_srt(scripts_data, audio_meta, srt_path)
+                log_output = self.log(f"✅ 자막 생성 완료: {srt_path.name}", log_output)
+
+            # 영상 렌더링
+            progress(0.6, desc="영상 렌더링 중...")
+            log_output = self.log("", log_output)
+            log_output = self.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", log_output)
+            log_output = self.log(f"🎬 STEP 4: 영상 렌더링 ({resolution_choice})", log_output)
+            log_output = self.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", log_output)
+            yield log_output, None, None, None
+
+            from app.modules.ffmpeg_renderer import FFmpegRenderer
+            renderer = FFmpegRenderer(resolution=resolution_choice)
+
+            quality_map = {"high": 18, "medium": 23, "low": 28}
+            crf = quality_map.get(video_quality, 23)
+            log_output = self.log(f"  - 영상 품질: {video_quality} (CRF: {crf})", log_output)
+            log_output = self.log(f"  - 인코딩 속도: {encoding_speed}", log_output)
+            log_output = self.log(f"  - 전환 효과: {transition_effect} ({transition_duration}초)", log_output)
+            yield log_output, None, None, None
+
+            final_video = renderer.render(
+                slides_dir=config.SLIDES_IMG_DIR,
+                audio_meta=audio_meta,
+                scripts_data=scripts_data,
+                output_path=config.OUTPUT_DIR / f"{output_name}.mp4",
+                transition_type=transition_effect,
+                transition_duration=float(transition_duration),
+                crf=crf,
+                preset=encoding_speed,
+                burn_subtitles=enable_subtitles,
+                subtitle_path=config.OUTPUT_DIR / f"{output_name}.srt" if enable_subtitles else None,
+                subtitle_font_size=int(subtitle_font_size)
+            )
+
+            if not final_video or not final_video.exists():
+                log_output = self.log("❌ 영상 렌더링 실패", log_output)
+                yield log_output, None, None, None
+                return
+
+            # 완료
+            progress(1.0, desc="완료!")
+            file_size_mb = final_video.stat().st_size / (1024 * 1024)
+
+            log_output = self.log("", log_output)
+            log_output = self.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", log_output)
+            log_output = self.log("✅ 변환 완료!", log_output)
+            log_output = self.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", log_output)
+            log_output = self.log("", log_output)
+            log_output = self.log("📊 최종 결과:", log_output)
+            log_output = self.log(f"  • 슬라이드 수: {len(scripts_data)}개", log_output)
+            log_output = self.log(f"  • 총 길이: {total_duration:.1f}초", log_output)
+            log_output = self.log(f"  • 해상도: {resolution_choice}", log_output)
+            log_output = self.log(f"  • 음성: {voice_choice}", log_output)
+            log_output = self.log(f"  • 파일 크기: {file_size_mb:.1f} MB", log_output)
+            log_output = self.log(f"  • 출력 파일: {final_video.name}", log_output)
+
+            yield log_output, str(final_video), None, None
+
+        except Exception as e:
+            error_msg = f"\n\n❌ 오류 발생: {str(e)}"
+            log_output = self.log(error_msg, log_output)
+            import traceback
+            traceback.print_exc()
+            yield log_output, None, None, None
+
     def convert_ppt_to_video_router(
         self,
         pptx_file,
@@ -1571,7 +1931,12 @@ class GradioUI:
                         info="fast = 빠르지만 큰 파일, slow = 느리지만 작은 파일"
                     )
 
-                    convert_btn = gr.Button("🎬 영상 생성", variant="primary", size="lg")
+                    gr.Markdown("---")
+                    gr.Markdown("### 🚀 단계별 실행")
+
+                    with gr.Row():
+                        script_btn = gr.Button("📝 1단계: 대본 생성", variant="secondary", size="lg")
+                        video_btn = gr.Button("🎬 2단계: 영상 생성", variant="primary", size="lg", interactive=False)
 
                 with gr.Column(scale=1):
                     gr.Markdown("### 📥 진행 상황 (Claude의 사고 과정)")
@@ -1603,16 +1968,18 @@ class GradioUI:
                         visible=True
                     )
 
-            # 대본 보기 영역
+            # 대본 편집 영역
             with gr.Row():
                 with gr.Column():
-                    gr.Markdown("### 📝 생성된 대본")
+                    gr.Markdown("### 📝 생성된 대본 (수정 가능)")
+                    gr.Markdown("*대본 생성 후 내용을 수정할 수 있습니다. 수정 후 '2단계: 영상 생성'을 클릭하세요.*")
                     script_output = gr.Textbox(
                         label="슬라이드별 대본 (TTS가 읽을 내용)",
                         lines=15,
-                        max_lines=20,
+                        max_lines=25,
                         show_copy_button=True,
-                        placeholder="영상 생성 후 대본이 여기에 표시됩니다..."
+                        interactive=True,
+                        placeholder="1단계: 대본 생성 버튼을 클릭하면 여기에 대본이 표시됩니다...\n\n대본을 확인하고 필요하면 수정한 후, 2단계: 영상 생성 버튼을 클릭하세요."
                     )
 
             # PPT 업로드 시 슬라이드 개수 분석 및 영상 길이 옵션 업데이트
@@ -1661,20 +2028,31 @@ class GradioUI:
                 outputs=[video_output_col, html_output_col]
             )
 
-            # 버튼 클릭 이벤트
-            convert_btn.click(
-                fn=self.convert_ppt_to_video_router,
+            # 1단계: 대본 생성 버튼 이벤트
+            script_btn.click(
+                fn=self.generate_scripts_only,
                 inputs=[
                     pptx_input,
                     output_name,
                     custom_request,
+                    total_duration,
+                    enable_keyword_marking,
+                    keyword_mark_style
+                ],
+                outputs=[progress_output, script_output, video_btn]
+            )
+
+            # 2단계: 영상 생성 버튼 이벤트
+            video_btn.click(
+                fn=self.generate_video_from_scripts,
+                inputs=[
+                    pptx_input,
+                    output_name,
+                    script_output,
                     conversion_mode,
                     reactant_output_format,
                     voice_choice,
                     resolution_choice,
-                    total_duration,
-                    enable_keyword_marking,
-                    keyword_mark_style,
                     enable_subtitles,
                     subtitle_font_size,
                     transition_effect,
@@ -1682,7 +2060,7 @@ class GradioUI:
                     video_quality,
                     encoding_speed
                 ],
-                outputs=[progress_output, video_output, zip_download, html_preview, script_output]
+                outputs=[progress_output, video_output, zip_download, html_preview]
             )
 
             gr.Markdown(
