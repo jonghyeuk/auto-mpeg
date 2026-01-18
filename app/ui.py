@@ -815,10 +815,10 @@ class GradioUI:
             yield log_output, "", gr.update(interactive=False)
 
             from app.modules.ppt_parser import PPTParser
-            parser = PPTParser()
 
             # PPT 파싱 (PDF 또는 PPTX)
             pptx_path = Path(pptx_file.name if hasattr(pptx_file, 'name') else pptx_file)
+            slides_json = config.META_DIR / "slides.json"
 
             if pptx_path.suffix.lower() == '.pdf':
                 from app.modules.pdf_parser import PDFParser
@@ -826,7 +826,8 @@ class GradioUI:
                 slides = pdf_parser.parse(pptx_path, config.SLIDES_IMG_DIR)
                 self.current_pdf_path = pptx_path
             else:
-                slides = parser.parse(pptx_path, config.SLIDES_IMG_DIR)
+                parser = PPTParser(str(pptx_path))
+                slides = parser.parse(slides_json, config.SLIDES_IMG_DIR)
                 self.current_pdf_path = None
 
             log_output = self.log(f"📊 총 {len(slides)}개 슬라이드 발견", log_output)
@@ -837,15 +838,19 @@ class GradioUI:
             context_analysis, log_output = self.analyze_ppt_context(slides, progress)
             yield log_output, "", gr.update(interactive=False)
 
-            # 시간 계획
+            # 시간 계획 (TTS pause_duration 고려)
+            PAUSE_DURATION = 0.7  # TTS에서 슬라이드당 추가되는 무음 시간
             total_duration_seconds = total_duration_minutes * 60
-            slides_per_duration = total_duration_seconds / len(slides)
+            pause_total = PAUSE_DURATION * len(slides)  # 전체 무음 시간
+            speech_duration = total_duration_seconds - pause_total  # 실제 대본 시간
+            slides_per_duration = speech_duration / len(slides)  # 슬라이드당 대본 시간
 
             log_output = self.log("", log_output)
             log_output = self.log("⏱️  영상 시간 계획:", log_output)
             log_output = self.log(f"  - 전체 목표 시간: {total_duration_minutes}분 ({total_duration_seconds}초)", log_output)
             log_output = self.log(f"  - 슬라이드 수: {len(slides)}개", log_output)
-            log_output = self.log(f"  - 슬라이드당 평균: {slides_per_duration:.1f}초", log_output)
+            log_output = self.log(f"  - 슬라이드 간 무음: {PAUSE_DURATION}초 × {len(slides)} = {pause_total:.1f}초", log_output)
+            log_output = self.log(f"  - 슬라이드당 대본 시간: {slides_per_duration:.1f}초", log_output)
             yield log_output, "", gr.update(interactive=False)
 
             # 대본 생성
@@ -1073,28 +1078,41 @@ class GradioUI:
             yield log_output, None, None, None
 
             from app.modules.ffmpeg_renderer import FFmpegRenderer
-            renderer = FFmpegRenderer(resolution=resolution_choice)
+
+            # 해상도 파싱
+            width, height = map(int, resolution_choice.split('x'))
 
             quality_map = {"high": 18, "medium": 23, "low": 28}
             crf = quality_map.get(video_quality, 23)
+
+            renderer = FFmpegRenderer(width=width, height=height, crf=crf, preset=encoding_speed)
+
             log_output = self.log(f"  - 영상 품질: {video_quality} (CRF: {crf})", log_output)
             log_output = self.log(f"  - 인코딩 속도: {encoding_speed}", log_output)
             log_output = self.log(f"  - 전환 효과: {transition_effect} ({transition_duration}초)", log_output)
             yield log_output, None, None, None
 
-            final_video = renderer.render(
-                slides_dir=config.SLIDES_IMG_DIR,
-                audio_meta=audio_meta,
-                scripts_data=scripts_data,
-                output_path=config.OUTPUT_DIR / f"{output_name}.mp4",
-                transition_type=transition_effect,
+            # 출력 경로 설정
+            slides_json = config.META_DIR / "slides.json"
+            final_video_path = config.OUTPUT_DIR / f"{output_name}.mp4"
+            subtitle_file = config.OUTPUT_DIR / f"{output_name}.srt" if enable_subtitles else None
+
+            success = renderer.render_video(
+                slides_json,
+                audio_meta_json,
+                config.SLIDES_IMG_DIR,
+                config.AUDIO_DIR,
+                config.CLIPS_DIR,
+                final_video_path,
+                scripts_json_path=scripts_json,
+                enable_keyword_marking=False,
+                transition_effect=transition_effect,
                 transition_duration=float(transition_duration),
-                crf=crf,
-                preset=encoding_speed,
-                burn_subtitles=enable_subtitles,
-                subtitle_path=config.OUTPUT_DIR / f"{output_name}.srt" if enable_subtitles else None,
+                subtitle_file=subtitle_file,
                 subtitle_font_size=int(subtitle_font_size)
             )
+
+            final_video = final_video_path if success else None
 
             if not final_video or not final_video.exists():
                 log_output = self.log("❌ 영상 렌더링 실패", log_output)
@@ -1112,7 +1130,7 @@ class GradioUI:
             log_output = self.log("", log_output)
             log_output = self.log("📊 최종 결과:", log_output)
             log_output = self.log(f"  • 슬라이드 수: {len(scripts_data)}개", log_output)
-            log_output = self.log(f"  • 총 길이: {total_duration:.1f}초", log_output)
+            log_output = self.log(f"  • 총 길이: {total_duration:.1f}초 ({total_duration/60:.1f}분)", log_output)
             log_output = self.log(f"  • 해상도: {resolution_choice}", log_output)
             log_output = self.log(f"  • 음성: {voice_choice}", log_output)
             log_output = self.log(f"  • 파일 크기: {file_size_mb:.1f} MB", log_output)
@@ -1126,6 +1144,99 @@ class GradioUI:
             import traceback
             traceback.print_exc()
             yield log_output, None, None, None
+
+    def convert_to_compatible_mp4(self, input_file, progress=gr.Progress()):
+        """
+        MP4 파일을 Windows 호환성 높은 형식으로 변환
+        (핸드폰 카메라처럼 어디서든 재생 가능)
+        """
+        import subprocess
+        log_output = ""
+
+        try:
+            if input_file is None:
+                log_output = self.log("❌ MP4 파일을 업로드해주세요.", log_output)
+                yield log_output, None
+                return
+
+            input_path = Path(input_file.name if hasattr(input_file, 'name') else input_file)
+            output_path = config.OUTPUT_DIR / f"{input_path.stem}_compatible.mp4"
+
+            # 출력 디렉토리 생성
+            config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+            log_output = self.log("🔄 MP4 호환성 변환 시작", log_output)
+            log_output = self.log(f"  입력: {input_path.name}", log_output)
+            log_output = self.log(f"  출력: {output_path.name}", log_output)
+            log_output = self.log("", log_output)
+            progress(0.1, desc="변환 준비 중...")
+            yield log_output, None
+
+            log_output = self.log("📋 변환 설정:", log_output)
+            log_output = self.log("  • 코덱: H.264 (libx264)", log_output)
+            log_output = self.log("  • 프로파일: Main (호환성 최적)", log_output)
+            log_output = self.log("  • 레벨: 4.0 (1080p 지원)", log_output)
+            log_output = self.log("  • 픽셀 포맷: yuv420p (표준)", log_output)
+            log_output = self.log("  • faststart: 활성화 (빠른 재생)", log_output)
+            log_output = self.log("", log_output)
+            yield log_output, None
+
+            # FFmpeg 변환 명령어 (핸드폰 카메라 수준 호환성)
+            cmd = [
+                "ffmpeg",
+                "-i", str(input_path),
+                "-c:v", "libx264",
+                "-profile:v", "main",  # 호환성 최적 프로파일
+                "-level", "4.0",  # 1080p 표준 레벨
+                "-preset", "medium",
+                "-crf", "23",  # 좋은 품질
+                "-pix_fmt", "yuv420p",  # 표준 픽셀 포맷
+                "-c:a", "aac",  # 오디오 코덱
+                "-b:a", "192k",  # 오디오 비트레이트
+                "-ar", "44100",  # 샘플레이트
+                "-movflags", "+faststart",  # 웹/스트리밍 최적화
+                "-y",  # 덮어쓰기
+                str(output_path)
+            ]
+
+            log_output = self.log("⏳ FFmpeg 변환 중...", log_output)
+            progress(0.3, desc="변환 중...")
+            yield log_output, None
+
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True
+            )
+
+            if result.returncode != 0:
+                log_output = self.log(f"❌ 변환 실패: {result.stderr[:200]}", log_output)
+                yield log_output, None
+                return
+
+            progress(1.0, desc="완료!")
+
+            # 파일 크기 비교
+            input_size = input_path.stat().st_size / (1024 * 1024)
+            output_size = output_path.stat().st_size / (1024 * 1024)
+
+            log_output = self.log("", log_output)
+            log_output = self.log("✅ 변환 완료!", log_output)
+            log_output = self.log("", log_output)
+            log_output = self.log("📊 결과:", log_output)
+            log_output = self.log(f"  • 원본 크기: {input_size:.1f} MB", log_output)
+            log_output = self.log(f"  • 변환 크기: {output_size:.1f} MB", log_output)
+            log_output = self.log(f"  • 출력 파일: {output_path.name}", log_output)
+            log_output = self.log("", log_output)
+            log_output = self.log("🎉 이제 Windows Media Player에서도 재생됩니다!", log_output)
+
+            yield log_output, str(output_path)
+
+        except Exception as e:
+            log_output = self.log(f"❌ 오류: {str(e)}", log_output)
+            import traceback
+            traceback.print_exc()
+            yield log_output, None
 
     def convert_ppt_to_video_router(
         self,
@@ -1352,15 +1463,19 @@ class GradioUI:
             context_analysis, log_output = self.analyze_ppt_context(slides, progress)
             yield log_output, None, scripts_formatted
 
-            # 각 슬라이드당 시간 계산
+            # 각 슬라이드당 시간 계산 (TTS pause_duration 고려)
+            PAUSE_DURATION = 0.7  # TTS에서 슬라이드당 추가되는 무음 시간
             total_duration_seconds = total_duration_minutes * 60
-            slides_per_duration = total_duration_seconds / len(slides)
+            pause_total = PAUSE_DURATION * len(slides)  # 전체 무음 시간
+            speech_duration = total_duration_seconds - pause_total  # 실제 대본 시간
+            slides_per_duration = speech_duration / len(slides)  # 슬라이드당 대본 시간
 
             log_output = self.log("", log_output)
             log_output = self.log("⏱️  영상 시간 계획:", log_output)
             log_output = self.log(f"  - 전체 목표 시간: {total_duration_minutes}분 ({total_duration_seconds}초)", log_output)
             log_output = self.log(f"  - 슬라이드 수: {len(slides)}개", log_output)
-            log_output = self.log(f"  - 슬라이드당 평균: {slides_per_duration:.1f}초", log_output)
+            log_output = self.log(f"  - 슬라이드 간 무음: {PAUSE_DURATION}초 × {len(slides)} = {pause_total:.1f}초", log_output)
+            log_output = self.log(f"  - 슬라이드당 대본 시간: {slides_per_duration:.1f}초", log_output)
             log_output = self.log("", log_output)
             yield log_output, None, scripts_formatted
 
@@ -1742,11 +1857,27 @@ class GradioUI:
             log_output = self.log("", log_output)
             log_output = self.log("📊 최종 결과:", log_output)
             log_output = self.log(f"  • 슬라이드 수: {len(slides)}개", log_output)
-            log_output = self.log(f"  • 총 길이: {total_duration:.1f}초", log_output)
+            log_output = self.log(f"  • 총 길이: {total_duration:.1f}초 ({total_duration/60:.1f}분)", log_output)
             log_output = self.log(f"  • 해상도: {resolution_choice}", log_output)
             log_output = self.log(f"  • 음성: {voice_choice}", log_output)
             log_output = self.log(f"  • 파일 크기: {file_size_mb:.1f} MB", log_output)
             log_output = self.log(f"  • 출력 파일: {final_video.name}", log_output)
+
+            # 목표 시간 vs 실제 시간 검증
+            target_seconds = total_duration_minutes * 60
+            difference = total_duration - target_seconds
+            difference_percent = (difference / target_seconds) * 100
+
+            log_output = self.log("", log_output)
+            log_output = self.log("⏱️  시간 검증:", log_output)
+            log_output = self.log(f"  • 목표: {total_duration_minutes}분 ({target_seconds}초)", log_output)
+            log_output = self.log(f"  • 실제: {total_duration/60:.1f}분 ({total_duration:.1f}초)", log_output)
+            if abs(difference) < 10:
+                log_output = self.log(f"  ✓ 목표 시간에 근접합니다 (차이: {difference:+.1f}초)", log_output)
+            elif difference > 0:
+                log_output = self.log(f"  ⚠️ 목표보다 {difference:.1f}초 깁니다 ({difference_percent:+.1f}%)", log_output)
+            else:
+                log_output = self.log(f"  ⚠️ 목표보다 {abs(difference):.1f}초 짧습니다 ({difference_percent:.1f}%)", log_output)
 
             yield log_output, str(final_video), scripts_formatted
 
@@ -2061,6 +2192,40 @@ class GradioUI:
                     encoding_speed
                 ],
                 outputs=[progress_output, video_output, zip_download, html_preview]
+            )
+
+            # ========== MP4 호환성 변환 섹션 ==========
+            gr.Markdown("---")
+            gr.Markdown(
+                """
+                ### 🔄 MP4 호환성 변환
+
+                **기존 MP4 파일**을 Windows Media Player에서도 재생되는 **호환성 높은 MP4**로 변환합니다.
+                (핸드폰 카메라로 촬영한 것처럼 어디서든 재생 가능)
+                """
+            )
+
+            with gr.Row():
+                with gr.Column(scale=1):
+                    mp4_input = gr.File(
+                        label="변환할 MP4 파일",
+                        file_types=[".mp4", ".avi", ".mov", ".mkv"],
+                        type="filepath"
+                    )
+                    convert_mp4_btn = gr.Button("🔄 호환성 변환", variant="secondary", size="lg")
+
+                with gr.Column(scale=1):
+                    mp4_progress = gr.Textbox(
+                        label="변환 로그",
+                        lines=5,
+                        max_lines=10
+                    )
+                    mp4_output = gr.Video(label="변환된 영상")
+
+            convert_mp4_btn.click(
+                fn=self.convert_to_compatible_mp4,
+                inputs=[mp4_input],
+                outputs=[mp4_progress, mp4_output]
             )
 
             gr.Markdown(
