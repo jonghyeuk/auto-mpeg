@@ -1145,6 +1145,99 @@ class GradioUI:
             traceback.print_exc()
             yield log_output, None, None, None
 
+    def convert_to_compatible_mp4(self, input_file, progress=gr.Progress()):
+        """
+        MP4 파일을 Windows 호환성 높은 형식으로 변환
+        (핸드폰 카메라처럼 어디서든 재생 가능)
+        """
+        import subprocess
+        log_output = ""
+
+        try:
+            if input_file is None:
+                log_output = self.log("❌ MP4 파일을 업로드해주세요.", log_output)
+                yield log_output, None
+                return
+
+            input_path = Path(input_file.name if hasattr(input_file, 'name') else input_file)
+            output_path = config.OUTPUT_DIR / f"{input_path.stem}_compatible.mp4"
+
+            # 출력 디렉토리 생성
+            config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+            log_output = self.log("🔄 MP4 호환성 변환 시작", log_output)
+            log_output = self.log(f"  입력: {input_path.name}", log_output)
+            log_output = self.log(f"  출력: {output_path.name}", log_output)
+            log_output = self.log("", log_output)
+            progress(0.1, desc="변환 준비 중...")
+            yield log_output, None
+
+            log_output = self.log("📋 변환 설정:", log_output)
+            log_output = self.log("  • 코덱: H.264 (libx264)", log_output)
+            log_output = self.log("  • 프로파일: Main (호환성 최적)", log_output)
+            log_output = self.log("  • 레벨: 4.0 (1080p 지원)", log_output)
+            log_output = self.log("  • 픽셀 포맷: yuv420p (표준)", log_output)
+            log_output = self.log("  • faststart: 활성화 (빠른 재생)", log_output)
+            log_output = self.log("", log_output)
+            yield log_output, None
+
+            # FFmpeg 변환 명령어 (핸드폰 카메라 수준 호환성)
+            cmd = [
+                "ffmpeg",
+                "-i", str(input_path),
+                "-c:v", "libx264",
+                "-profile:v", "main",  # 호환성 최적 프로파일
+                "-level", "4.0",  # 1080p 표준 레벨
+                "-preset", "medium",
+                "-crf", "23",  # 좋은 품질
+                "-pix_fmt", "yuv420p",  # 표준 픽셀 포맷
+                "-c:a", "aac",  # 오디오 코덱
+                "-b:a", "192k",  # 오디오 비트레이트
+                "-ar", "44100",  # 샘플레이트
+                "-movflags", "+faststart",  # 웹/스트리밍 최적화
+                "-y",  # 덮어쓰기
+                str(output_path)
+            ]
+
+            log_output = self.log("⏳ FFmpeg 변환 중...", log_output)
+            progress(0.3, desc="변환 중...")
+            yield log_output, None
+
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True
+            )
+
+            if result.returncode != 0:
+                log_output = self.log(f"❌ 변환 실패: {result.stderr[:200]}", log_output)
+                yield log_output, None
+                return
+
+            progress(1.0, desc="완료!")
+
+            # 파일 크기 비교
+            input_size = input_path.stat().st_size / (1024 * 1024)
+            output_size = output_path.stat().st_size / (1024 * 1024)
+
+            log_output = self.log("", log_output)
+            log_output = self.log("✅ 변환 완료!", log_output)
+            log_output = self.log("", log_output)
+            log_output = self.log("📊 결과:", log_output)
+            log_output = self.log(f"  • 원본 크기: {input_size:.1f} MB", log_output)
+            log_output = self.log(f"  • 변환 크기: {output_size:.1f} MB", log_output)
+            log_output = self.log(f"  • 출력 파일: {output_path.name}", log_output)
+            log_output = self.log("", log_output)
+            log_output = self.log("🎉 이제 Windows Media Player에서도 재생됩니다!", log_output)
+
+            yield log_output, str(output_path)
+
+        except Exception as e:
+            log_output = self.log(f"❌ 오류: {str(e)}", log_output)
+            import traceback
+            traceback.print_exc()
+            yield log_output, None
+
     def convert_ppt_to_video_router(
         self,
         pptx_file,
@@ -2099,6 +2192,40 @@ class GradioUI:
                     encoding_speed
                 ],
                 outputs=[progress_output, video_output, zip_download, html_preview]
+            )
+
+            # ========== MP4 호환성 변환 섹션 ==========
+            gr.Markdown("---")
+            gr.Markdown(
+                """
+                ### 🔄 MP4 호환성 변환
+
+                **기존 MP4 파일**을 Windows Media Player에서도 재생되는 **호환성 높은 MP4**로 변환합니다.
+                (핸드폰 카메라로 촬영한 것처럼 어디서든 재생 가능)
+                """
+            )
+
+            with gr.Row():
+                with gr.Column(scale=1):
+                    mp4_input = gr.File(
+                        label="변환할 MP4 파일",
+                        file_types=[".mp4", ".avi", ".mov", ".mkv"],
+                        type="filepath"
+                    )
+                    convert_mp4_btn = gr.Button("🔄 호환성 변환", variant="secondary", size="lg")
+
+                with gr.Column(scale=1):
+                    mp4_progress = gr.Textbox(
+                        label="변환 로그",
+                        lines=5,
+                        max_lines=10
+                    )
+                    mp4_output = gr.Video(label="변환된 영상")
+
+            convert_mp4_btn.click(
+                fn=self.convert_to_compatible_mp4,
+                inputs=[mp4_input],
+                outputs=[mp4_progress, mp4_output]
             )
 
             gr.Markdown(
