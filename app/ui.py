@@ -1461,13 +1461,13 @@ class GradioUI:
 
         return MergedTranscript(all_segments)
 
-    def correct_spelling_with_claude(self, segments, batch_size=20):
+    def correct_spelling_with_claude(self, segments, batch_size=10):
         """
         Claude API로 자막 맞춤법 교정 (배치 처리)
 
         Args:
             segments: 자막 세그먼트 리스트
-            batch_size: 한 번에 처리할 자막 수 (기본값: 20)
+            batch_size: 한 번에 처리할 자막 수 (기본값: 10)
         """
         import anthropic
 
@@ -1487,23 +1487,21 @@ class GradioUI:
             original_texts = [seg.get("text", "") for seg in batch_segments]
             combined_text = "\n".join([f"{i+1}. {text}" for i, text in enumerate(original_texts)])
 
-            prompt = f"""다음은 음성 인식(STT)으로 추출한 자막입니다.
-맞춤법과 띄어쓰기만 교정해주세요.
+            prompt = f"""음성 인식(STT) 자막의 맞춤법만 교정하세요.
 
-중요한 규칙:
-- 단어를 추가하거나 삭제하지 마세요
-- 문장을 다듬거나 요약하지 마세요
-- 절대로 "..."로 생략하지 마세요. 전체 문장을 그대로 출력하세요
-- 말한 내용 그대로 유지하고, 맞춤법만 수정하세요
-- 구어체 표현(~해가지고, ~거든요 등)은 그대로 유지하세요
+[필수 규칙]
+1. 입력된 문장을 100% 그대로 출력하되, 맞춤법/띄어쓰기만 수정
+2. 단어 추가/삭제 절대 금지
+3. "..." 사용 절대 금지 - 문장 전체를 빠짐없이 출력
+4. 요약/축약 절대 금지
+5. 구어체(~해가지고, ~거든요) 그대로 유지
 
-자막 목록:
+[입력]
 {combined_text}
 
-응답 형식 (각 줄의 전체 내용을 출력):
-1. 교정된 전체 텍스트
-2. 교정된 전체 텍스트
-(이하 동일)"""
+[출력 형식]
+1. (첫번째 문장 전체)
+2. (두번째 문장 전체)"""
 
             try:
                 response = client.messages.create(
@@ -1634,10 +1632,14 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
     def burn_subtitles_to_video(self, video_path, ass_path, output_path):
         """자막을 영상에 합성 (하드코딩)"""
+        # FFmpeg ass 필터에서 Windows 경로의 백슬래시를 슬래시로 변환
+        # (백슬래시는 FFmpeg 필터에서 이스케이프 문자로 해석됨)
+        ass_path_escaped = str(ass_path).replace("\\", "/")
+
         cmd = [
             "ffmpeg",
             "-i", str(video_path),
-            "-vf", f"ass={str(ass_path)}",
+            "-vf", f"ass='{ass_path_escaped}'",
             "-c:v", "libx264",
             "-profile:v", "main",
             "-level", "4.0",
