@@ -1615,11 +1615,16 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             traceback.print_exc()
             yield log_output, None, None, gr.update(interactive=False)
 
-    def process_subtitle_mode_step2(self, video_path_state, segments_file_state, upscale_target, progress=gr.Progress()):
+    def process_subtitle_mode_step2(self, video_path_state, segments_file_state, upscale_target, previous_log="", progress=gr.Progress()):
         """
         자막 모드 Step 2: 자막 합성 → 미리보기 제공
         """
-        log_output = ""
+        # 이전 로그 유지 (원본 vs 교정 자막 비교 보존)
+        log_output = previous_log if previous_log else ""
+        log_output = self.log("", log_output)
+        log_output = self.log("━" * 50, log_output)
+        log_output = self.log("🎬 Step 2 시작: 자막 합성", log_output)
+        log_output = self.log("━" * 50, log_output)
 
         try:
             if not video_path_state or not segments_file_state:
@@ -1689,11 +1694,16 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             traceback.print_exc()
             yield log_output, None, gr.update(interactive=False)
 
-    def process_subtitle_mode_step3(self, upscale_target, progress=gr.Progress()):
+    def process_subtitle_mode_step3(self, upscale_target, previous_log="", progress=gr.Progress()):
         """
         자막 모드 Step 3: 업스케일링 및 최종 저장
         """
-        log_output = ""
+        # 이전 로그 유지 (전체 과정 추적 가능)
+        log_output = previous_log if previous_log else ""
+        log_output = self.log("", log_output)
+        log_output = self.log("━" * 50, log_output)
+        log_output = self.log("📈 Step 3 시작: 업스케일 및 최종 저장", log_output)
+        log_output = self.log("━" * 50, log_output)
 
         try:
             temp_dir = config.TEMP_DIR / "subtitle_mode"
@@ -2791,17 +2801,17 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                     outputs=[subtitle_log, video_path_state, segments_file_state, subtitle_step2_btn]
                 )
 
-                # Step 2: 자막 합성 및 미리보기
+                # Step 2: 자막 합성 및 미리보기 (이전 로그 유지)
                 subtitle_step2_btn.click(
                     fn=self.process_subtitle_mode_step2,
-                    inputs=[video_path_state, segments_file_state, subtitle_upscale_target],
+                    inputs=[video_path_state, segments_file_state, subtitle_upscale_target, subtitle_log],
                     outputs=[subtitle_log, subtitle_preview, subtitle_step3_btn]
                 )
 
-                # Step 3: 업스케일 및 최종 저장
+                # Step 3: 업스케일 및 최종 저장 (이전 로그 유지)
                 subtitle_step3_btn.click(
                     fn=self.process_subtitle_mode_step3,
-                    inputs=[subtitle_upscale_target],
+                    inputs=[subtitle_upscale_target, subtitle_log],
                     outputs=[subtitle_log, subtitle_final_output]
                 )
 
