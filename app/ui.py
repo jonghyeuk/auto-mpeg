@@ -1238,6 +1238,522 @@ class GradioUI:
             traceback.print_exc()
             yield log_output, None
 
+    # ============================================================
+    # MP4 자막 모드 함수들
+    # ============================================================
+
+    def extract_audio_from_video(self, video_path, output_audio_path):
+        """MP4에서 오디오 추출 (FFmpeg)"""
+        cmd = [
+            "ffmpeg",
+            "-i", str(video_path),
+            "-vn",  # 비디오 제외
+            "-acodec", "pcm_s16le",  # WAV 포맷
+            "-ar", "16000",  # 16kHz (Whisper 최적)
+            "-ac", "1",  # 모노
+            "-y",
+            str(output_audio_path)
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        return result.returncode == 0
+
+    def transcribe_with_whisper(self, audio_path):
+        """OpenAI Whisper API로 음성을 텍스트로 변환"""
+        from openai import OpenAI
+
+        client = OpenAI(api_key=config.OPENAI_API_KEY)
+
+        with open(audio_path, "rb") as audio_file:
+            transcript = client.audio.transcriptions.create(
+                model="whisper-1",
+                file=audio_file,
+                language="ko",
+                response_format="verbose_json",
+                timestamp_granularities=["segment"]
+            )
+
+        return transcript
+
+    def correct_spelling_with_claude(self, segments):
+        """Claude API로 자막 맞춤법 교정"""
+        import anthropic
+
+        client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
+
+        # 자막 텍스트 추출
+        original_texts = [seg.get("text", "") for seg in segments]
+        combined_text = "\n".join([f"{i+1}. {text}" for i, text in enumerate(original_texts)])
+
+        prompt = f"""다음 자막들의 맞춤법과 띄어쓰기를 교정해주세요.
+원본 의미와 뉘앙스는 유지하되, 한국어 맞춤법에 맞게 수정해주세요.
+각 줄의 번호를 유지하고, 교정된 텍스트만 응답해주세요.
+
+자막 목록:
+{combined_text}
+
+응답 형식:
+1. [교정된 텍스트]
+2. [교정된 텍스트]
+..."""
+
+        response = client.messages.create(
+            model="claude-3-5-haiku-20241022",
+            max_tokens=4096,
+            messages=[{"role": "user", "content": prompt}]
+        )
+
+        # 응답 파싱
+        corrected_texts = []
+        response_text = response.content[0].text
+        lines = response_text.strip().split("\n")
+
+        import re
+        for line in lines:
+            match = re.match(r'\d+\.\s*(.+)', line)
+            if match:
+                corrected_texts.append(match.group(1).strip())
+
+        # 교정된 텍스트를 segments에 반영
+        corrected_segments = []
+        for i, seg in enumerate(segments):
+            corrected_seg = seg.copy()
+            if i < len(corrected_texts):
+                corrected_seg["corrected_text"] = corrected_texts[i]
+            else:
+                corrected_seg["corrected_text"] = seg.get("text", "")
+            corrected_segments.append(corrected_seg)
+
+        return corrected_segments
+
+    def format_subtitles_two_lines(self, segments, max_chars_per_line=25):
+        """자막을 2줄로 포맷팅 (3줄 이상 방지)"""
+        formatted_segments = []
+
+        for seg in segments:
+            text = seg.get("corrected_text", seg.get("text", ""))
+
+            # 텍스트가 너무 길면 2줄로 분할
+            if len(text) > max_chars_per_line:
+                # 중간 지점에서 자연스럽게 분할
+                words = text.split()
+                mid = len(text) // 2
+
+                # 공백 기준으로 분할점 찾기
+                best_split = mid
+                for i, char in enumerate(text):
+                    if char == ' ' and abs(i - mid) < abs(best_split - mid):
+                        best_split = i
+
+                if best_split > 0 and best_split < len(text):
+                    line1 = text[:best_split].strip()
+                    line2 = text[best_split:].strip()
+
+                    # 각 줄이 너무 길면 자르기
+                    if len(line1) > max_chars_per_line:
+                        line1 = line1[:max_chars_per_line-3] + "..."
+                    if len(line2) > max_chars_per_line:
+                        line2 = line2[:max_chars_per_line-3] + "..."
+
+                    formatted_text = f"{line1}\\N{line2}"
+                else:
+                    formatted_text = text[:max_chars_per_line*2]
+            else:
+                formatted_text = text
+
+            formatted_seg = seg.copy()
+            formatted_seg["formatted_text"] = formatted_text
+            formatted_segments.append(formatted_seg)
+
+        return formatted_segments
+
+    def generate_ass_subtitles(self, segments, output_path, video_width=1920, video_height=1080):
+        """ASS 자막 파일 생성 (페이드 인/아웃 효과 포함)"""
+
+        # ASS 헤더
+        ass_header = f"""[Script Info]
+Title: Auto Generated Subtitles
+ScriptType: v4.00+
+PlayResX: {video_width}
+PlayResY: {video_height}
+WrapStyle: 0
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,Malgun Gothic,48,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,2,1,2,30,30,60,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+"""
+
+        def format_time(seconds):
+            """초를 ASS 시간 형식으로 변환"""
+            h = int(seconds // 3600)
+            m = int((seconds % 3600) // 60)
+            s = int(seconds % 60)
+            cs = int((seconds % 1) * 100)
+            return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
+
+        events = []
+        fade_duration = 200  # 페이드 효과 시간 (밀리초)
+
+        for seg in segments:
+            start = seg.get("start", 0)
+            end = seg.get("end", start + 3)
+            text = seg.get("formatted_text", seg.get("corrected_text", seg.get("text", "")))
+
+            # 페이드 인/아웃 효과 추가
+            fade_effect = f"{{\\fad({fade_duration},{fade_duration})}}"
+
+            start_time = format_time(start)
+            end_time = format_time(end)
+
+            events.append(f"Dialogue: 0,{start_time},{end_time},Default,,0,0,0,,{fade_effect}{text}")
+
+        # 파일 저장
+        with open(output_path, "w", encoding="utf-8") as f:
+            f.write(ass_header + "\n".join(events))
+
+        return output_path
+
+    def burn_subtitles_to_video(self, video_path, ass_path, output_path):
+        """자막을 영상에 합성 (하드코딩)"""
+        cmd = [
+            "ffmpeg",
+            "-i", str(video_path),
+            "-vf", f"ass={str(ass_path)}",
+            "-c:v", "libx264",
+            "-profile:v", "main",
+            "-level", "4.0",
+            "-preset", "medium",
+            "-crf", "23",
+            "-pix_fmt", "yuv420p",
+            "-c:a", "aac",
+            "-b:a", "192k",
+            "-movflags", "+faststart",
+            "-y",
+            str(output_path)
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        return result.returncode == 0, result.stderr
+
+    def upscale_video(self, input_path, output_path, target_height=1080):
+        """영상 업스케일링 (lanczos 알고리즘)"""
+        # 원본 해상도 확인
+        probe_cmd = [
+            "ffprobe", "-v", "error",
+            "-select_streams", "v:0",
+            "-show_entries", "stream=width,height",
+            "-of", "csv=p=0",
+            str(input_path)
+        ]
+        probe_result = subprocess.run(probe_cmd, capture_output=True, text=True)
+
+        if probe_result.returncode != 0:
+            return False, "해상도 확인 실패"
+
+        try:
+            width, height = map(int, probe_result.stdout.strip().split(','))
+        except:
+            return False, "해상도 파싱 실패"
+
+        # 이미 목표 해상도 이상이면 스킵
+        if height >= target_height:
+            # 그냥 복사
+            shutil.copy(input_path, output_path)
+            return True, f"이미 {height}p (업스케일 불필요)"
+
+        # 업스케일 비율 계산
+        scale_factor = target_height / height
+        new_width = int(width * scale_factor)
+        # 짝수로 맞추기
+        new_width = new_width + (new_width % 2)
+
+        cmd = [
+            "ffmpeg",
+            "-i", str(input_path),
+            "-vf", f"scale={new_width}:{target_height}:flags=lanczos",
+            "-c:v", "libx264",
+            "-profile:v", "main",
+            "-level", "4.0",
+            "-preset", "medium",
+            "-crf", "20",  # 업스케일 시 약간 높은 품질
+            "-pix_fmt", "yuv420p",
+            "-c:a", "copy",
+            "-movflags", "+faststart",
+            "-y",
+            str(output_path)
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+
+        if result.returncode == 0:
+            return True, f"{height}p → {target_height}p 업스케일 완료"
+        else:
+            return False, result.stderr[:200]
+
+    def process_subtitle_mode_step1(self, input_file, progress=gr.Progress()):
+        """
+        자막 모드 Step 1: 음성 추출 → STT → 맞춤법 교정
+        결과: 원본 자막 + 교정된 자막 비교 표시
+        """
+        log_output = ""
+
+        try:
+            if input_file is None:
+                log_output = self.log("❌ MP4 파일을 업로드해주세요.", log_output)
+                yield log_output, None, None, gr.update(interactive=False)
+                return
+
+            input_path = Path(input_file)
+
+            # 임시 디렉토리 생성
+            temp_dir = config.TEMP_DIR / "subtitle_mode"
+            temp_dir.mkdir(parents=True, exist_ok=True)
+
+            audio_path = temp_dir / "extracted_audio.wav"
+
+            # Step 1: 오디오 추출
+            log_output = self.log("🎵 Step 1: 오디오 추출 중...", log_output)
+            progress(0.1, desc="오디오 추출 중...")
+            yield log_output, None, None, gr.update(interactive=False)
+
+            if not self.extract_audio_from_video(input_path, audio_path):
+                log_output = self.log("❌ 오디오 추출 실패", log_output)
+                yield log_output, None, None, gr.update(interactive=False)
+                return
+
+            log_output = self.log("  ✓ 오디오 추출 완료", log_output)
+            yield log_output, None, None, gr.update(interactive=False)
+
+            # Step 2: Whisper STT
+            log_output = self.log("", log_output)
+            log_output = self.log("🎤 Step 2: 음성 인식 중 (OpenAI Whisper)...", log_output)
+            log_output = self.log("  (이 단계는 영상 길이에 따라 시간이 걸릴 수 있습니다)", log_output)
+            progress(0.3, desc="음성 인식 중...")
+            yield log_output, None, None, gr.update(interactive=False)
+
+            transcript = self.transcribe_with_whisper(audio_path)
+            segments = transcript.segments if hasattr(transcript, 'segments') else []
+
+            # segments를 딕셔너리 리스트로 변환
+            segments_list = []
+            for seg in segments:
+                segments_list.append({
+                    "start": seg.start if hasattr(seg, 'start') else seg.get("start", 0),
+                    "end": seg.end if hasattr(seg, 'end') else seg.get("end", 0),
+                    "text": seg.text if hasattr(seg, 'text') else seg.get("text", "")
+                })
+
+            log_output = self.log(f"  ✓ {len(segments_list)}개 자막 세그먼트 추출됨", log_output)
+            yield log_output, None, None, gr.update(interactive=False)
+
+            # 원본 자막 표시
+            log_output = self.log("", log_output)
+            log_output = self.log("=" * 50, log_output)
+            log_output = self.log("📝 [원본 자막 - STT 결과]", log_output)
+            log_output = self.log("=" * 50, log_output)
+            for i, seg in enumerate(segments_list):
+                start = seg["start"]
+                text = seg["text"]
+                log_output = self.log(f"  [{start:.1f}s] {text}", log_output)
+            yield log_output, None, None, gr.update(interactive=False)
+
+            # Step 3: 맞춤법 교정
+            log_output = self.log("", log_output)
+            log_output = self.log("✏️ Step 3: 맞춤법 교정 중 (Claude AI)...", log_output)
+            progress(0.6, desc="맞춤법 교정 중...")
+            yield log_output, None, None, gr.update(interactive=False)
+
+            corrected_segments = self.correct_spelling_with_claude(segments_list)
+
+            log_output = self.log("  ✓ 맞춤법 교정 완료", log_output)
+            yield log_output, None, None, gr.update(interactive=False)
+
+            # 교정된 자막 표시
+            log_output = self.log("", log_output)
+            log_output = self.log("=" * 50, log_output)
+            log_output = self.log("✅ [교정된 자막]", log_output)
+            log_output = self.log("=" * 50, log_output)
+            for i, seg in enumerate(corrected_segments):
+                start = seg["start"]
+                original = seg["text"]
+                corrected = seg.get("corrected_text", original)
+                if original != corrected:
+                    log_output = self.log(f"  [{start:.1f}s] {corrected}", log_output)
+                    log_output = self.log(f"          (원본: {original})", log_output)
+                else:
+                    log_output = self.log(f"  [{start:.1f}s] {corrected}", log_output)
+            yield log_output, None, None, gr.update(interactive=False)
+
+            # 2줄 포맷팅
+            formatted_segments = self.format_subtitles_two_lines(corrected_segments)
+
+            # 세그먼트 데이터 저장 (Step 2에서 사용)
+            segments_file = temp_dir / "segments.json"
+            with open(segments_file, "w", encoding="utf-8") as f:
+                json.dump(formatted_segments, f, ensure_ascii=False, indent=2)
+
+            # 입력 비디오 경로 저장
+            video_info_file = temp_dir / "video_info.json"
+            with open(video_info_file, "w", encoding="utf-8") as f:
+                json.dump({"input_path": str(input_path)}, f)
+
+            progress(1.0, desc="준비 완료")
+
+            log_output = self.log("", log_output)
+            log_output = self.log("=" * 50, log_output)
+            log_output = self.log("✅ 자막 추출 완료!", log_output)
+            log_output = self.log("", log_output)
+            log_output = self.log("위 자막을 확인하시고, 문제가 없으면", log_output)
+            log_output = self.log("'자막 합성 및 업스케일' 버튼을 눌러주세요.", log_output)
+            log_output = self.log("=" * 50, log_output)
+
+            yield log_output, str(input_path), str(segments_file), gr.update(interactive=True)
+
+        except Exception as e:
+            log_output = self.log(f"❌ 오류: {str(e)}", log_output)
+            import traceback
+            traceback.print_exc()
+            yield log_output, None, None, gr.update(interactive=False)
+
+    def process_subtitle_mode_step2(self, video_path_state, segments_file_state, upscale_target, progress=gr.Progress()):
+        """
+        자막 모드 Step 2: 자막 합성 → 미리보기 제공
+        """
+        log_output = ""
+
+        try:
+            if not video_path_state or not segments_file_state:
+                log_output = self.log("❌ 먼저 Step 1을 완료해주세요.", log_output)
+                yield log_output, None, gr.update(interactive=False)
+                return
+
+            input_path = Path(video_path_state)
+
+            # 세그먼트 로드
+            with open(segments_file_state, "r", encoding="utf-8") as f:
+                segments = json.load(f)
+
+            temp_dir = config.TEMP_DIR / "subtitle_mode"
+            ass_path = temp_dir / "subtitles.ass"
+            subtitled_path = temp_dir / "subtitled_video.mp4"
+
+            # Step 1: ASS 자막 생성
+            log_output = self.log("📝 Step 1: ASS 자막 파일 생성 중...", log_output)
+            progress(0.1, desc="자막 파일 생성 중...")
+            yield log_output, None, gr.update(interactive=False)
+
+            self.generate_ass_subtitles(segments, ass_path)
+            log_output = self.log("  ✓ 자막 파일 생성 완료 (페이드 효과 적용)", log_output)
+            yield log_output, None, gr.update(interactive=False)
+
+            # Step 2: 자막 합성
+            log_output = self.log("", log_output)
+            log_output = self.log("🎬 Step 2: 영상에 자막 합성 중...", log_output)
+            log_output = self.log("  (영상 길이에 따라 시간이 걸립니다)", log_output)
+            progress(0.3, desc="자막 합성 중...")
+            yield log_output, None, gr.update(interactive=False)
+
+            success, msg = self.burn_subtitles_to_video(input_path, ass_path, subtitled_path)
+
+            if not success:
+                log_output = self.log(f"❌ 자막 합성 실패: {msg}", log_output)
+                yield log_output, None, gr.update(interactive=False)
+                return
+
+            log_output = self.log("  ✓ 자막 합성 완료", log_output)
+            yield log_output, None, gr.update(interactive=False)
+
+            # 미리보기 경로 저장
+            preview_info = temp_dir / "preview_info.json"
+            with open(preview_info, "w", encoding="utf-8") as f:
+                json.dump({
+                    "subtitled_path": str(subtitled_path),
+                    "upscale_target": upscale_target
+                }, f)
+
+            progress(1.0, desc="미리보기 준비 완료")
+
+            log_output = self.log("", log_output)
+            log_output = self.log("=" * 50, log_output)
+            log_output = self.log("✅ 자막 합성 완료! 미리보기를 확인하세요.", log_output)
+            log_output = self.log("", log_output)
+            log_output = self.log("미리보기 확인 후 '업스케일 및 최종 저장' 버튼을", log_output)
+            log_output = self.log("눌러 최종 영상을 생성하세요.", log_output)
+            log_output = self.log("=" * 50, log_output)
+
+            yield log_output, str(subtitled_path), gr.update(interactive=True)
+
+        except Exception as e:
+            log_output = self.log(f"❌ 오류: {str(e)}", log_output)
+            import traceback
+            traceback.print_exc()
+            yield log_output, None, gr.update(interactive=False)
+
+    def process_subtitle_mode_step3(self, upscale_target, progress=gr.Progress()):
+        """
+        자막 모드 Step 3: 업스케일링 및 최종 저장
+        """
+        log_output = ""
+
+        try:
+            temp_dir = config.TEMP_DIR / "subtitle_mode"
+            preview_info_path = temp_dir / "preview_info.json"
+
+            if not preview_info_path.exists():
+                log_output = self.log("❌ 먼저 자막 합성을 완료해주세요.", log_output)
+                yield log_output, None
+                return
+
+            with open(preview_info_path, "r", encoding="utf-8") as f:
+                preview_info = json.load(f)
+
+            subtitled_path = Path(preview_info["subtitled_path"])
+
+            # 출력 파일명 생성
+            import time
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            output_path = config.OUTPUT_DIR / f"subtitled_{timestamp}.mp4"
+
+            # 업스케일링
+            target_height = int(upscale_target.replace("p", ""))
+
+            log_output = self.log(f"📈 업스케일링: 목표 {upscale_target}...", log_output)
+            progress(0.3, desc="업스케일링 중...")
+            yield log_output, None
+
+            success, msg = self.upscale_video(subtitled_path, output_path, target_height)
+
+            if not success:
+                log_output = self.log(f"❌ 업스케일 실패: {msg}", log_output)
+                yield log_output, None
+                return
+
+            log_output = self.log(f"  ✓ {msg}", log_output)
+
+            # 파일 크기
+            output_size = output_path.stat().st_size / (1024 * 1024)
+
+            progress(1.0, desc="완료!")
+
+            log_output = self.log("", log_output)
+            log_output = self.log("=" * 50, log_output)
+            log_output = self.log("🎉 최종 영상 생성 완료!", log_output)
+            log_output = self.log("", log_output)
+            log_output = self.log(f"  • 출력 파일: {output_path.name}", log_output)
+            log_output = self.log(f"  • 파일 크기: {output_size:.1f} MB", log_output)
+            log_output = self.log(f"  • 해상도: {upscale_target}", log_output)
+            log_output = self.log("", log_output)
+            log_output = self.log("Windows Media Player에서도 재생됩니다!", log_output)
+            log_output = self.log("=" * 50, log_output)
+
+            yield log_output, str(output_path)
+
+        except Exception as e:
+            log_output = self.log(f"❌ 오류: {str(e)}", log_output)
+            import traceback
+            traceback.print_exc()
+            yield log_output, None
+
     def convert_ppt_to_video_router(
         self,
         pptx_file,
@@ -1908,23 +2424,30 @@ class GradioUI:
         with gr.Blocks(css=custom_css, title="PPT to Video Converter") as demo:
             gr.Markdown(
                 """
-                # 🎬 PPT to Video Converter (상세 버전)
+                # 🎬 Auto-MPEG Converter
 
-                PPT 파일을 AI 음성 설명이 포함된 교육 영상으로 자동 변환합니다.
-
-                **✨ 특징: Claude의 사고 과정을 실시간으로 확인할 수 있습니다!**
-
-                1. PPT 전체 맥락 분석
-                2. 각 슬라이드별 특징 파악
-                3. 대본 생성 과정 표시
-                4. 대본 검증 (PPT와 대조)
-                5. TTS 및 영상 합성
+                PPT/MP4 파일을 AI 기반으로 변환합니다.
                 """
             )
 
-            with gr.Row():
-                with gr.Column(scale=1):
-                    gr.Markdown("### 📤 입력 설정")
+            with gr.Tabs() as main_tabs:
+                # ============================================================
+                # 탭 1: 기본 모드 (Teaching + TTS)
+                # ============================================================
+                with gr.Tab("📚 기본 모드 (Teaching + TTS)"):
+                    gr.Markdown(
+                        """
+                        ### PPT → AI 음성 교육 영상
+
+                        **✨ 특징: Claude의 사고 과정을 실시간으로 확인할 수 있습니다!**
+
+                        1. PPT 전체 맥락 분석 → 2. 대본 생성 → 3. TTS 음성 합성 → 4. 영상 조립
+                        """
+                    )
+
+                    with gr.Row():
+                        with gr.Column(scale=1):
+                            gr.Markdown("### 📤 입력 설정")
 
                     pptx_input = gr.File(
                         label="PPT/PDF 파일 업로드",
@@ -2194,40 +2717,133 @@ class GradioUI:
                 outputs=[progress_output, video_output, zip_download, html_preview]
             )
 
-            # ========== MP4 호환성 변환 섹션 ==========
-            gr.Markdown("---")
-            gr.Markdown(
-                """
-                ### 🔄 MP4 호환성 변환
+            # ============================================================
+            # 탭 2: MP4 자막 모드 (강의 + 자막 생성)
+            # ============================================================
+            with gr.Tab("🎬 MP4 자막 모드 (강의 + 자막)"):
+                gr.Markdown(
+                    """
+                    ### MP4 → 자막 추가 + 업스케일링
 
-                **기존 MP4 파일**을 Windows Media Player에서도 재생되는 **호환성 높은 MP4**로 변환합니다.
-                (핸드폰 카메라로 촬영한 것처럼 어디서든 재생 가능)
-                """
-            )
+                    **기존 MP4 강의 영상**에 AI로 자막을 생성하고 화질을 개선합니다.
 
-            with gr.Row():
-                with gr.Column(scale=1):
-                    mp4_input = gr.File(
-                        label="변환할 MP4 파일",
-                        file_types=[".mp4", ".avi", ".mov", ".mkv"],
-                        type="filepath"
-                    )
-                    convert_mp4_btn = gr.Button("🔄 호환성 변환", variant="secondary", size="lg")
+                    **워크플로우:**
+                    1. 음성 추출 (FFmpeg)
+                    2. 음성 → 텍스트 (OpenAI Whisper)
+                    3. 맞춤법 교정 (Claude AI)
+                    4. 자막 합성 (페이드 인/아웃)
+                    5. 미리보기 확인
+                    6. 업스케일링 + 최종 저장
 
-                with gr.Column(scale=1):
-                    mp4_progress = gr.Textbox(
-                        label="변환 로그",
-                        lines=5,
-                        max_lines=10
-                    )
-                    mp4_output = gr.Video(label="변환된 영상")
+                    **비용:** Whisper $0.006/분 (40분 = 약 320원)
+                    """
+                )
 
-            convert_mp4_btn.click(
-                fn=self.convert_to_compatible_mp4,
-                inputs=[mp4_input],
-                outputs=[mp4_progress, mp4_output]
-            )
+                with gr.Row():
+                    with gr.Column(scale=1):
+                        gr.Markdown("### 📤 Step 1: 영상 업로드 & 자막 추출")
 
+                        subtitle_mp4_input = gr.File(
+                            label="MP4 파일 업로드",
+                            file_types=[".mp4", ".avi", ".mov", ".mkv"],
+                            type="filepath"
+                        )
+
+                        subtitle_upscale_target = gr.Dropdown(
+                            choices=["720p", "1080p", "1440p"],
+                            value="1080p",
+                            label="업스케일 목표 해상도",
+                            info="최종 출력 해상도"
+                        )
+
+                        subtitle_step1_btn = gr.Button("🎤 자막 추출 시작", variant="primary", size="lg")
+
+                        gr.Markdown("---")
+                        gr.Markdown("### 🎬 Step 2: 자막 합성")
+                        subtitle_step2_btn = gr.Button("📝 자막 합성 및 미리보기", variant="secondary", size="lg", interactive=False)
+
+                        gr.Markdown("---")
+                        gr.Markdown("### 📈 Step 3: 업스케일 및 저장")
+                        subtitle_step3_btn = gr.Button("🚀 업스케일 및 최종 저장", variant="secondary", size="lg", interactive=False)
+
+                    with gr.Column(scale=2):
+                        subtitle_log = gr.Textbox(
+                            label="📋 처리 로그 (원본 자막 vs 교정된 자막)",
+                            lines=20,
+                            max_lines=30,
+                            elem_classes=["output-text"]
+                        )
+
+                        gr.Markdown("### 🎥 미리보기 (업스케일 전)")
+                        subtitle_preview = gr.Video(label="자막 합성 미리보기")
+
+                        gr.Markdown("### 📁 최종 출력")
+                        subtitle_final_output = gr.Video(label="최종 영상 (업스케일 완료)")
+
+                # Hidden states
+                video_path_state = gr.State(value=None)
+                segments_file_state = gr.State(value=None)
+
+                # Step 1: 자막 추출
+                subtitle_step1_btn.click(
+                    fn=self.process_subtitle_mode_step1,
+                    inputs=[subtitle_mp4_input],
+                    outputs=[subtitle_log, video_path_state, segments_file_state, subtitle_step2_btn]
+                )
+
+                # Step 2: 자막 합성 및 미리보기
+                subtitle_step2_btn.click(
+                    fn=self.process_subtitle_mode_step2,
+                    inputs=[video_path_state, segments_file_state, subtitle_upscale_target],
+                    outputs=[subtitle_log, subtitle_preview, subtitle_step3_btn]
+                )
+
+                # Step 3: 업스케일 및 최종 저장
+                subtitle_step3_btn.click(
+                    fn=self.process_subtitle_mode_step3,
+                    inputs=[subtitle_upscale_target],
+                    outputs=[subtitle_log, subtitle_final_output]
+                )
+
+            # ============================================================
+            # 탭 3: MP4 호환성 변환
+            # ============================================================
+            with gr.Tab("🔄 MP4 호환성 변환"):
+                gr.Markdown(
+                    """
+                    ### MP4 호환성 변환
+
+                    **기존 MP4 파일**을 Windows Media Player에서도 재생되는 **호환성 높은 MP4**로 변환합니다.
+                    (핸드폰 카메라로 촬영한 것처럼 어디서든 재생 가능)
+                    """
+                )
+
+                with gr.Row():
+                    with gr.Column(scale=1):
+                        mp4_input = gr.File(
+                            label="변환할 MP4 파일",
+                            file_types=[".mp4", ".avi", ".mov", ".mkv"],
+                            type="filepath"
+                        )
+                        convert_mp4_btn = gr.Button("🔄 호환성 변환", variant="secondary", size="lg")
+
+                    with gr.Column(scale=1):
+                        mp4_progress = gr.Textbox(
+                            label="변환 로그",
+                            lines=5,
+                            max_lines=10
+                        )
+                        mp4_output = gr.Video(label="변환된 영상")
+
+                convert_mp4_btn.click(
+                    fn=self.convert_to_compatible_mp4,
+                    inputs=[mp4_input],
+                    outputs=[mp4_progress, mp4_output]
+                )
+
+            # ============================================================
+            # 공통 정보 (탭 외부)
+            # ============================================================
             gr.Markdown(
                 """
                 ---
@@ -2241,9 +2857,10 @@ class GradioUI:
 
                 ### 📚 기술 스택
 
-                - **LLM**: Claude (대본 생성 + 맥락 분석)
+                - **LLM**: Claude (대본 생성 + 맞춤법 교정)
+                - **STT**: OpenAI Whisper (음성 인식)
                 - **TTS**: OpenAI TTS (음성 합성)
-                - **영상**: FFmpeg (영상 조립)
+                - **영상**: FFmpeg (영상 조립 + 업스케일)
                 """
             )
 
