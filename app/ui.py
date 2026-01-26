@@ -1461,56 +1461,85 @@ class GradioUI:
 
         return MergedTranscript(all_segments)
 
-    def correct_spelling_with_claude(self, segments):
-        """Claude API로 자막 맞춤법 교정"""
+    def correct_spelling_with_claude(self, segments, batch_size=20):
+        """
+        Claude API로 자막 맞춤법 교정 (배치 처리)
+
+        Args:
+            segments: 자막 세그먼트 리스트
+            batch_size: 한 번에 처리할 자막 수 (기본값: 20)
+        """
         import anthropic
 
         client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
 
-        # 자막 텍스트 추출
-        original_texts = [seg.get("text", "") for seg in segments]
-        combined_text = "\n".join([f"{i+1}. {text}" for i, text in enumerate(original_texts)])
+        all_corrected_segments = []
+        total_batches = (len(segments) + batch_size - 1) // batch_size
 
-        prompt = f"""다음 자막들의 맞춤법과 띄어쓰기를 교정해주세요.
-원본 의미와 뉘앙스는 유지하되, 한국어 맞춤법에 맞게 수정해주세요.
-각 줄의 번호를 유지하고, 교정된 텍스트만 응답해주세요.
+        for batch_idx in range(total_batches):
+            start_idx = batch_idx * batch_size
+            end_idx = min(start_idx + batch_size, len(segments))
+            batch_segments = segments[start_idx:end_idx]
+
+            print(f"  📝 맞춤법 교정 중... ({batch_idx + 1}/{total_batches} 배치)")
+
+            # 자막 텍스트 추출
+            original_texts = [seg.get("text", "") for seg in batch_segments]
+            combined_text = "\n".join([f"{i+1}. {text}" for i, text in enumerate(original_texts)])
+
+            prompt = f"""다음은 음성 인식(STT)으로 추출한 자막입니다.
+맞춤법과 띄어쓰기만 교정해주세요.
+
+중요한 규칙:
+- 단어를 추가하거나 삭제하지 마세요
+- 문장을 다듬거나 요약하지 마세요
+- 말한 내용 그대로 유지하고, 맞춤법만 수정하세요
+- 구어체 표현(~해가지고, ~거든요 등)은 그대로 유지하세요
 
 자막 목록:
 {combined_text}
 
 응답 형식:
-1. [교정된 텍스트]
-2. [교정된 텍스트]
+1. [맞춤법만 교정된 텍스트]
+2. [맞춤법만 교정된 텍스트]
 ..."""
 
-        response = client.messages.create(
-            model="claude-3-5-haiku-20241022",
-            max_tokens=4096,
-            messages=[{"role": "user", "content": prompt}]
-        )
+            try:
+                response = client.messages.create(
+                    model="claude-3-5-haiku-20241022",
+                    max_tokens=4096,
+                    messages=[{"role": "user", "content": prompt}]
+                )
 
-        # 응답 파싱
-        corrected_texts = []
-        response_text = response.content[0].text
-        lines = response_text.strip().split("\n")
+                # 응답 파싱
+                corrected_texts = []
+                response_text = response.content[0].text
+                lines = response_text.strip().split("\n")
 
-        import re
-        for line in lines:
-            match = re.match(r'\d+\.\s*(.+)', line)
-            if match:
-                corrected_texts.append(match.group(1).strip())
+                import re
+                for line in lines:
+                    match = re.match(r'\d+\.\s*(.+)', line)
+                    if match:
+                        corrected_texts.append(match.group(1).strip())
 
-        # 교정된 텍스트를 segments에 반영
-        corrected_segments = []
-        for i, seg in enumerate(segments):
-            corrected_seg = seg.copy()
-            if i < len(corrected_texts):
-                corrected_seg["corrected_text"] = corrected_texts[i]
-            else:
-                corrected_seg["corrected_text"] = seg.get("text", "")
-            corrected_segments.append(corrected_seg)
+                # 교정된 텍스트를 segments에 반영
+                for i, seg in enumerate(batch_segments):
+                    corrected_seg = seg.copy()
+                    if i < len(corrected_texts):
+                        corrected_seg["corrected_text"] = corrected_texts[i]
+                    else:
+                        corrected_seg["corrected_text"] = seg.get("text", "")
+                    all_corrected_segments.append(corrected_seg)
 
-        return corrected_segments
+            except Exception as e:
+                print(f"  ⚠️ 배치 {batch_idx + 1} 교정 실패: {str(e)}")
+                # 실패 시 원본 텍스트 사용
+                for seg in batch_segments:
+                    corrected_seg = seg.copy()
+                    corrected_seg["corrected_text"] = seg.get("text", "")
+                    all_corrected_segments.append(corrected_seg)
+
+        return all_corrected_segments
 
     def format_subtitles_two_lines(self, segments, max_chars_per_line=25):
         """자막을 2줄로 포맷팅 (3줄 이상 방지)"""
@@ -1680,14 +1709,15 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     def process_subtitle_mode_step1(self, input_file, progress=gr.Progress()):
         """
         자막 모드 Step 1: 음성 추출 → STT → 맞춤법 교정
-        결과: 원본 자막 + 교정된 자막 비교 표시
+        결과: 원본 자막 + 교정된 자막 비교 표시 + 편집 가능한 Dataframe
         """
         log_output = ""
+        empty_df = []  # 빈 Dataframe
 
         try:
             if input_file is None:
                 log_output = self.log("❌ MP4 파일을 업로드해주세요.", log_output)
-                yield log_output, None, None, gr.update(interactive=False)
+                yield log_output, None, None, empty_df, gr.update(interactive=False)
                 return
 
             input_path = Path(input_file)
@@ -1701,15 +1731,15 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             # Step 1: 오디오 추출
             log_output = self.log("🎵 Step 1: 오디오 추출 중...", log_output)
             progress(0.1, desc="오디오 추출 중...")
-            yield log_output, None, None, gr.update(interactive=False)
+            yield log_output, None, None, empty_df, gr.update(interactive=False)
 
             if not self.extract_audio_from_video(input_path, audio_path):
                 log_output = self.log("❌ 오디오 추출 실패", log_output)
-                yield log_output, None, None, gr.update(interactive=False)
+                yield log_output, None, None, empty_df, gr.update(interactive=False)
                 return
 
             log_output = self.log("  ✓ 오디오 추출 완료", log_output)
-            yield log_output, None, None, gr.update(interactive=False)
+            yield log_output, None, None, empty_df, gr.update(interactive=False)
 
             # Step 2: Whisper STT
             log_output = self.log("", log_output)
@@ -1730,7 +1760,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 log_output = self.log("  (이 단계는 영상 길이에 따라 시간이 걸릴 수 있습니다)", log_output)
 
             progress(0.3, desc="음성 인식 중...")
-            yield log_output, None, None, gr.update(interactive=False)
+            yield log_output, None, None, empty_df, gr.update(interactive=False)
 
             transcript = self.transcribe_with_whisper(audio_path)
             segments = transcript.segments if hasattr(transcript, 'segments') else []
@@ -1749,45 +1779,18 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                     })
 
             log_output = self.log(f"  ✓ {len(segments_list)}개 자막 세그먼트 추출됨", log_output)
-            yield log_output, None, None, gr.update(interactive=False)
-
-            # 원본 자막 표시
-            log_output = self.log("", log_output)
-            log_output = self.log("=" * 50, log_output)
-            log_output = self.log("📝 [원본 자막 - STT 결과]", log_output)
-            log_output = self.log("=" * 50, log_output)
-            for i, seg in enumerate(segments_list):
-                start = seg["start"]
-                text = seg["text"]
-                log_output = self.log(f"  [{start:.1f}s] {text}", log_output)
-            yield log_output, None, None, gr.update(interactive=False)
+            yield log_output, None, None, empty_df, gr.update(interactive=False)
 
             # Step 3: 맞춤법 교정
             log_output = self.log("", log_output)
             log_output = self.log("✏️ Step 3: 맞춤법 교정 중 (Claude AI)...", log_output)
             progress(0.6, desc="맞춤법 교정 중...")
-            yield log_output, None, None, gr.update(interactive=False)
+            yield log_output, None, None, empty_df, gr.update(interactive=False)
 
             corrected_segments = self.correct_spelling_with_claude(segments_list)
 
             log_output = self.log("  ✓ 맞춤법 교정 완료", log_output)
-            yield log_output, None, None, gr.update(interactive=False)
-
-            # 교정된 자막 표시
-            log_output = self.log("", log_output)
-            log_output = self.log("=" * 50, log_output)
-            log_output = self.log("✅ [교정된 자막]", log_output)
-            log_output = self.log("=" * 50, log_output)
-            for i, seg in enumerate(corrected_segments):
-                start = seg["start"]
-                original = seg["text"]
-                corrected = seg.get("corrected_text", original)
-                if original != corrected:
-                    log_output = self.log(f"  [{start:.1f}s] {corrected}", log_output)
-                    log_output = self.log(f"          (원본: {original})", log_output)
-                else:
-                    log_output = self.log(f"  [{start:.1f}s] {corrected}", log_output)
-            yield log_output, None, None, gr.update(interactive=False)
+            yield log_output, None, None, empty_df, gr.update(interactive=False)
 
             # 2줄 포맷팅
             formatted_segments = self.format_subtitles_two_lines(corrected_segments)
@@ -1802,17 +1805,25 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             with open(video_info_file, "w", encoding="utf-8") as f:
                 json.dump({"input_path": str(input_path)}, f)
 
+            # Dataframe용 데이터 생성
+            df_data = []
+            for seg in formatted_segments:
+                start_str = f"{seg['start']:.1f}s"
+                end_str = f"{seg['end']:.1f}s"
+                text = seg.get("formatted_text", seg.get("corrected_text", seg.get("text", "")))
+                df_data.append([start_str, end_str, text])
+
             progress(1.0, desc="준비 완료")
 
             log_output = self.log("", log_output)
             log_output = self.log("=" * 50, log_output)
             log_output = self.log("✅ 자막 추출 완료!", log_output)
             log_output = self.log("", log_output)
-            log_output = self.log("위 자막을 확인하시고, 문제가 없으면", log_output)
-            log_output = self.log("'자막 합성 및 업스케일' 버튼을 눌러주세요.", log_output)
+            log_output = self.log("아래 '자막 편집기'에서 자막을 수정할 수 있습니다.", log_output)
+            log_output = self.log("수정 완료 후 'Step 2' 버튼을 눌러주세요.", log_output)
             log_output = self.log("=" * 50, log_output)
 
-            yield log_output, str(input_path), str(segments_file), gr.update(interactive=True)
+            yield log_output, str(input_path), str(segments_file), df_data, gr.update(interactive=True)
 
         except Exception as e:
             error_str = str(e)
@@ -1843,13 +1854,14 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             else:
                 log_output = self.log(f"❌ 오류: {error_str}", log_output)
 
-            yield log_output, None, None, gr.update(interactive=False)
+            yield log_output, None, None, [], gr.update(interactive=False)
 
-    def process_subtitle_mode_step2(self, video_path_state, segments_file_state, upscale_target, previous_log="", progress=gr.Progress()):
+    def process_subtitle_mode_step2(self, video_path_state, segments_file_state, upscale_target, previous_log="", subtitle_editor_data=None, progress=gr.Progress()):
         """
         자막 모드 Step 2: 자막 합성 → 미리보기 제공
+        편집된 자막(Dataframe)을 사용하여 처리
         """
-        # 이전 로그 유지 (원본 vs 교정 자막 비교 보존)
+        # 이전 로그 유지
         log_output = previous_log if previous_log else ""
         log_output = self.log("", log_output)
         log_output = self.log("━" * 50, log_output)
@@ -1864,9 +1876,29 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
             input_path = Path(video_path_state)
 
-            # 세그먼트 로드
+            # 원본 세그먼트 로드
             with open(segments_file_state, "r", encoding="utf-8") as f:
                 segments = json.load(f)
+
+            # Dataframe에서 편집된 자막 적용
+            if subtitle_editor_data is not None and len(subtitle_editor_data) > 0:
+                log_output = self.log("📝 편집된 자막 적용 중...", log_output)
+                yield log_output, None, gr.update(interactive=False)
+
+                for i, row in enumerate(subtitle_editor_data):
+                    if i < len(segments):
+                        # Dataframe의 텍스트로 업데이트
+                        edited_text = row[2] if len(row) > 2 else ""
+                        if edited_text:
+                            segments[i]["formatted_text"] = edited_text
+                            segments[i]["corrected_text"] = edited_text
+
+                # 편집된 세그먼트 저장
+                with open(segments_file_state, "w", encoding="utf-8") as f:
+                    json.dump(segments, f, ensure_ascii=False, indent=2)
+
+                log_output = self.log("  ✓ 편집된 자막 적용 완료", log_output)
+                yield log_output, None, gr.update(interactive=False)
 
             temp_dir = config.TEMP_DIR / "subtitle_mode"
             ass_path = temp_dir / "subtitles.ass"
@@ -3008,10 +3040,22 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
                         with gr.Column(scale=2):
                             subtitle_log = gr.Textbox(
-                                label="📋 처리 로그 (원본 자막 vs 교정된 자막)",
-                                lines=20,
-                                max_lines=30,
+                                label="📋 처리 로그",
+                                lines=10,
+                                max_lines=15,
                                 elem_classes=["output-text"]
+                            )
+
+                            gr.Markdown("### ✏️ 자막 편집")
+                            gr.Markdown("*교정된 자막을 직접 수정할 수 있습니다. 수정 후 'Step 2' 버튼을 누르세요.*")
+                            subtitle_editor = gr.Dataframe(
+                                headers=["시작", "종료", "교정된 자막"],
+                                datatype=["str", "str", "str"],
+                                col_count=(3, "fixed"),
+                                row_count=(1, "dynamic"),
+                                interactive=True,
+                                label="자막 편집기",
+                                wrap=True
                             )
 
                             gr.Markdown("### 🎥 미리보기 (업스케일 전)")
@@ -3028,13 +3072,13 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                     subtitle_step1_btn.click(
                         fn=self.process_subtitle_mode_step1,
                         inputs=[subtitle_mp4_input],
-                        outputs=[subtitle_log, video_path_state, segments_file_state, subtitle_step2_btn]
+                        outputs=[subtitle_log, video_path_state, segments_file_state, subtitle_editor, subtitle_step2_btn]
                     )
 
-                    # Step 2: 자막 합성 및 미리보기 (이전 로그 유지)
+                    # Step 2: 자막 합성 및 미리보기 (편집된 자막 사용)
                     subtitle_step2_btn.click(
                         fn=self.process_subtitle_mode_step2,
-                        inputs=[video_path_state, segments_file_state, subtitle_upscale_target, subtitle_log],
+                        inputs=[video_path_state, segments_file_state, subtitle_upscale_target, subtitle_log, subtitle_editor],
                         outputs=[subtitle_log, subtitle_preview, subtitle_step3_btn]
                     )
 
