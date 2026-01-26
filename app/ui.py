@@ -1257,22 +1257,42 @@ class GradioUI:
         result = subprocess.run(cmd, capture_output=True, text=True)
         return result.returncode == 0
 
-    def transcribe_with_whisper(self, audio_path):
-        """OpenAI Whisper API로 음성을 텍스트로 변환"""
+    def transcribe_with_whisper(self, audio_path, max_retries=3):
+        """OpenAI Whisper API로 음성을 텍스트로 변환 (재시도 로직 포함)"""
         from openai import OpenAI
+        import time
 
         client = OpenAI(api_key=config.OPENAI_API_KEY)
 
-        with open(audio_path, "rb") as audio_file:
-            transcript = client.audio.transcriptions.create(
-                model="whisper-1",
-                file=audio_file,
-                language="ko",
-                response_format="verbose_json",
-                timestamp_granularities=["segment"]
-            )
+        last_error = None
+        for attempt in range(max_retries):
+            try:
+                with open(audio_path, "rb") as audio_file:
+                    transcript = client.audio.transcriptions.create(
+                        model="whisper-1",
+                        file=audio_file,
+                        language="ko",
+                        response_format="verbose_json",
+                        timestamp_granularities=["segment"]
+                    )
+                return transcript
+            except Exception as e:
+                last_error = e
+                error_str = str(e)
 
-        return transcript
+                # 500 에러(서버 오류) 또는 네트워크 관련 오류인 경우 재시도
+                if "500" in error_str or "502" in error_str or "503" in error_str or "timeout" in error_str.lower():
+                    if attempt < max_retries - 1:
+                        wait_time = 2 ** (attempt + 1)  # 지수 백오프: 2, 4, 8초
+                        print(f"  ⚠️ OpenAI 서버 오류 발생. {wait_time}초 후 재시도... (시도 {attempt + 1}/{max_retries})")
+                        time.sleep(wait_time)
+                        continue
+
+                # 재시도 불가능한 오류이거나 최대 재시도 횟수 초과
+                raise
+
+        # 모든 재시도 실패
+        raise last_error
 
     def correct_spelling_with_claude(self, segments):
         """Claude API로 자막 맞춤법 교정"""
@@ -1610,9 +1630,34 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             yield log_output, str(input_path), str(segments_file), gr.update(interactive=True)
 
         except Exception as e:
-            log_output = self.log(f"❌ 오류: {str(e)}", log_output)
+            error_str = str(e)
             import traceback
             traceback.print_exc()
+
+            # OpenAI 서버 에러 (500, 502, 503)
+            if "500" in error_str or "502" in error_str or "503" in error_str:
+                log_output = self.log("❌ OpenAI 서버 오류가 발생했습니다.", log_output)
+                log_output = self.log("   (3회 재시도 후에도 실패)", log_output)
+                log_output = self.log("", log_output)
+                log_output = self.log("💡 해결 방법:", log_output)
+                log_output = self.log("   1. OpenAI 서버 상태 확인: https://status.openai.com", log_output)
+                log_output = self.log("   2. 잠시 후 다시 시도해주세요", log_output)
+                log_output = self.log("   3. 오디오 파일이 25MB 이하인지 확인", log_output)
+            # OpenAI API 키 오류
+            elif "api_key" in error_str.lower() or "authentication" in error_str.lower() or "401" in error_str:
+                log_output = self.log("❌ OpenAI API 키 오류", log_output)
+                log_output = self.log("", log_output)
+                log_output = self.log("💡 .env 파일에서 OPENAI_API_KEY를 확인해주세요.", log_output)
+            # 파일 크기 제한 오류
+            elif "413" in error_str or "too large" in error_str.lower():
+                log_output = self.log("❌ 오디오 파일이 너무 큽니다.", log_output)
+                log_output = self.log("", log_output)
+                log_output = self.log("💡 Whisper API는 25MB 이하 파일만 지원합니다.", log_output)
+                log_output = self.log("   더 짧은 영상을 사용하거나 영상을 분할해주세요.", log_output)
+            # 기타 오류
+            else:
+                log_output = self.log(f"❌ 오류: {error_str}", log_output)
+
             yield log_output, None, None, gr.update(interactive=False)
 
     def process_subtitle_mode_step2(self, video_path_state, segments_file_state, upscale_target, previous_log="", progress=gr.Progress()):
