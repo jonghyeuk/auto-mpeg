@@ -3058,8 +3058,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                                 interactive=True,
                                 label="자막 편집기 (셀 더블클릭으로 편집)",
                                 wrap=True,
-                                column_widths=["70px", "70px", "500px"],
-                                height=400
+                                column_widths=["70px", "70px", "500px"]
                             )
 
                             gr.Markdown("### 🎥 미리보기 (업스케일 전)")
