@@ -1805,12 +1805,14 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             with open(video_info_file, "w", encoding="utf-8") as f:
                 json.dump({"input_path": str(input_path)}, f)
 
-            # Dataframe용 데이터 생성
+            # Dataframe용 데이터 생성 (\N을 공백으로 변환하여 표시)
             df_data = []
             for seg in formatted_segments:
                 start_str = f"{seg['start']:.1f}s"
                 end_str = f"{seg['end']:.1f}s"
                 text = seg.get("formatted_text", seg.get("corrected_text", seg.get("text", "")))
+                # \N (ASS 줄바꿈)을 공백으로 변환하여 편집기에 표시
+                text = text.replace("\\N", " ")
                 df_data.append([start_str, end_str, text])
 
             progress(1.0, desc="준비 완료")
@@ -3054,8 +3056,9 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                                 col_count=(3, "fixed"),
                                 row_count=(1, "dynamic"),
                                 interactive=True,
-                                label="자막 편집기",
-                                wrap=True
+                                label="자막 편집기 (셀 더블클릭으로 편집)",
+                                wrap=True,
+                                column_widths=["70px", "70px", "500px"]
                             )
 
                             gr.Markdown("### 🎥 미리보기 (업스케일 전)")
