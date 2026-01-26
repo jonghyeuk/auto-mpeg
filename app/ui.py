@@ -1805,15 +1805,16 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             with open(video_info_file, "w", encoding="utf-8") as f:
                 json.dump({"input_path": str(input_path)}, f)
 
-            # Dataframe용 데이터 생성 (\N을 공백으로 변환하여 표시)
+            # Dataframe용 데이터 생성 (원본 + 교정 둘 다 표시)
             df_data = []
             for seg in formatted_segments:
                 start_str = f"{seg['start']:.1f}s"
-                end_str = f"{seg['end']:.1f}s"
-                text = seg.get("formatted_text", seg.get("corrected_text", seg.get("text", "")))
-                # \N (ASS 줄바꿈)을 공백으로 변환하여 편집기에 표시
-                text = text.replace("\\N", " ")
-                df_data.append([start_str, end_str, text])
+                # 원본 자막
+                original_text = seg.get("text", "")
+                # 교정된 자막 (\N을 공백으로 변환)
+                corrected_text = seg.get("formatted_text", seg.get("corrected_text", original_text))
+                corrected_text = corrected_text.replace("\\N", " ")
+                df_data.append([start_str, original_text, corrected_text])
 
             progress(1.0, desc="준비 완료")
 
@@ -3049,16 +3050,15 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                             )
 
                             gr.Markdown("### ✏️ 자막 편집")
-                            gr.Markdown("*교정된 자막을 직접 수정할 수 있습니다. 수정 후 'Step 2' 버튼을 누르세요.*")
+                            gr.Markdown("*'교정된 자막' 컬럼을 직접 수정할 수 있습니다. 수정 후 'Step 2' 버튼을 누르세요.*")
                             subtitle_editor = gr.Dataframe(
-                                headers=["시작", "종료", "교정된 자막"],
+                                headers=["시작", "원본 자막", "교정된 자막 (편집 가능)"],
                                 datatype=["str", "str", "str"],
                                 col_count=(3, "fixed"),
                                 row_count=(1, "dynamic"),
-                                interactive=True,
-                                label="자막 편집기 (셀 더블클릭으로 편집)",
-                                wrap=True,
-                                column_widths=["70px", "70px", "500px"]
+                                interactive=[False, False, True],
+                                label="자막 편집기",
+                                wrap=True
                             )
 
                             gr.Markdown("### 🎥 미리보기 (업스케일 전)")
