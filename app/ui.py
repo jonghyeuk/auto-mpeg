@@ -2613,243 +2613,243 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                         show_copy_button=True
                     )
 
-            # 출력 영역
-            with gr.Row():
-                with gr.Column(visible=True) as video_output_col:
-                    video_output = gr.Video(
-                        label="완성된 영상 (MP4)",
-                        autoplay=False
+                    # 출력 영역
+                    with gr.Row():
+                        with gr.Column(visible=True) as video_output_col:
+                            video_output = gr.Video(
+                                label="완성된 영상 (MP4)",
+                                autoplay=False
+                            )
+
+                        with gr.Column(visible=False) as html_output_col:
+                            gr.Markdown("### 🎬 HTML 플레이어")
+                            html_preview = gr.HTML(
+                                label="안내",
+                                value="<div style='text-align:center; padding:50px; background:#1a1a2e; color:#fff; border-radius:10px;'>변환 완료 후 ZIP을 다운로드하세요</div>"
+                            )
+                            zip_download = gr.File(
+                                label="📦 ZIP 다운로드 (HTML + 오디오 + 이미지)",
+                                visible=True
+                            )
+
+                    # 대본 편집 영역
+                    with gr.Row():
+                        with gr.Column():
+                            gr.Markdown("### 📝 생성된 대본 (수정 가능)")
+                            gr.Markdown("*대본 생성 후 내용을 수정할 수 있습니다. 수정 후 '2단계: 영상 생성'을 클릭하세요.*")
+                            script_output = gr.Textbox(
+                                label="슬라이드별 대본 (TTS가 읽을 내용)",
+                                lines=15,
+                                max_lines=25,
+                                show_copy_button=True,
+                                interactive=True,
+                                placeholder="1단계: 대본 생성 버튼을 클릭하면 여기에 대본이 표시됩니다...\n\n대본을 확인하고 필요하면 수정한 후, 2단계: 영상 생성 버튼을 클릭하세요."
+                            )
+
+                    # PPT 업로드 시 슬라이드 개수 분석 및 영상 길이 옵션 업데이트
+                    def update_duration_options(pptx_file):
+                        """PPT 업로드 시 슬라이드 개수에 따라 영상 길이 옵션 업데이트"""
+                        slide_count = self.count_slides(pptx_file)
+                        choices, value, info = self.get_available_durations(slide_count)
+
+                        return gr.Dropdown(choices=choices, value=value, info=info), slide_count
+
+                    pptx_input.change(
+                        fn=update_duration_options,
+                        inputs=[pptx_input],
+                        outputs=[total_duration, slide_count_state]
                     )
 
-                with gr.Column(visible=False) as html_output_col:
-                    gr.Markdown("### 🎬 HTML 플레이어")
-                    html_preview = gr.HTML(
-                        label="안내",
-                        value="<div style='text-align:center; padding:50px; background:#1a1a2e; color:#fff; border-radius:10px;'>변환 완료 후 ZIP을 다운로드하세요</div>"
-                    )
-                    zip_download = gr.File(
-                        label="📦 ZIP 다운로드 (HTML + 오디오 + 이미지)",
-                        visible=True
-                    )
+                    # 변환 모드 변경 시 리액턴트 출력 형식 표시/숨김
+                    def update_reactant_options(mode):
+                        """변환 모드에 따라 리액턴트 옵션 표시"""
+                        is_reactant = (mode == "ppt-reactant-mpeg")
+                        return gr.update(visible=is_reactant)
 
-            # 대본 편집 영역
-            with gr.Row():
-                with gr.Column():
-                    gr.Markdown("### 📝 생성된 대본 (수정 가능)")
-                    gr.Markdown("*대본 생성 후 내용을 수정할 수 있습니다. 수정 후 '2단계: 영상 생성'을 클릭하세요.*")
-                    script_output = gr.Textbox(
-                        label="슬라이드별 대본 (TTS가 읽을 내용)",
-                        lines=15,
-                        max_lines=25,
-                        show_copy_button=True,
-                        interactive=True,
-                        placeholder="1단계: 대본 생성 버튼을 클릭하면 여기에 대본이 표시됩니다...\n\n대본을 확인하고 필요하면 수정한 후, 2단계: 영상 생성 버튼을 클릭하세요."
+                    conversion_mode.change(
+                        fn=update_reactant_options,
+                        inputs=[conversion_mode],
+                        outputs=[reactant_output_format]
                     )
 
-            # PPT 업로드 시 슬라이드 개수 분석 및 영상 길이 옵션 업데이트
-            def update_duration_options(pptx_file):
-                """PPT 업로드 시 슬라이드 개수에 따라 영상 길이 옵션 업데이트"""
-                slide_count = self.count_slides(pptx_file)
-                choices, value, info = self.get_available_durations(slide_count)
+                    # 출력 형식 변경 시 출력 컬럼 전환
+                    def update_output_columns(mode, output_format):
+                        """출력 형식에 따라 비디오/HTML 컬럼 전환"""
+                        if mode == "ppt-reactant-mpeg" and output_format == "html":
+                            return gr.update(visible=False), gr.update(visible=True)
+                        else:
+                            return gr.update(visible=True), gr.update(visible=False)
 
-                return gr.Dropdown(choices=choices, value=value, info=info), slide_count
+                    conversion_mode.change(
+                        fn=update_output_columns,
+                        inputs=[conversion_mode, reactant_output_format],
+                        outputs=[video_output_col, html_output_col]
+                    )
 
-            pptx_input.change(
-                fn=update_duration_options,
-                inputs=[pptx_input],
-                outputs=[total_duration, slide_count_state]
-            )
+                    reactant_output_format.change(
+                        fn=update_output_columns,
+                        inputs=[conversion_mode, reactant_output_format],
+                        outputs=[video_output_col, html_output_col]
+                    )
 
-            # 변환 모드 변경 시 리액턴트 출력 형식 표시/숨김
-            def update_reactant_options(mode):
-                """변환 모드에 따라 리액턴트 옵션 표시"""
-                is_reactant = (mode == "ppt-reactant-mpeg")
-                return gr.update(visible=is_reactant)
+                    # 1단계: 대본 생성 버튼 이벤트
+                    script_btn.click(
+                        fn=self.generate_scripts_only,
+                        inputs=[
+                            pptx_input,
+                            output_name,
+                            custom_request,
+                            total_duration,
+                            enable_keyword_marking,
+                            keyword_mark_style
+                        ],
+                        outputs=[progress_output, script_output, video_btn]
+                    )
 
-            conversion_mode.change(
-                fn=update_reactant_options,
-                inputs=[conversion_mode],
-                outputs=[reactant_output_format]
-            )
+                    # 2단계: 영상 생성 버튼 이벤트
+                    video_btn.click(
+                        fn=self.generate_video_from_scripts,
+                        inputs=[
+                            pptx_input,
+                            output_name,
+                            script_output,
+                            conversion_mode,
+                            reactant_output_format,
+                            voice_choice,
+                            resolution_choice,
+                            enable_subtitles,
+                            subtitle_font_size,
+                            transition_effect,
+                            transition_duration,
+                            video_quality,
+                            encoding_speed
+                        ],
+                        outputs=[progress_output, video_output, zip_download, html_preview]
+                    )
 
-            # 출력 형식 변경 시 출력 컬럼 전환
-            def update_output_columns(mode, output_format):
-                """출력 형식에 따라 비디오/HTML 컬럼 전환"""
-                if mode == "ppt-reactant-mpeg" and output_format == "html":
-                    return gr.update(visible=False), gr.update(visible=True)
-                else:
-                    return gr.update(visible=True), gr.update(visible=False)
+                # ============================================================
+                # 탭 2: MP4 자막 모드 (강의 + 자막 생성)
+                # ============================================================
+                with gr.Tab("🎬 MP4 자막 모드 (강의 + 자막)"):
+                    gr.Markdown(
+                        """
+                        ### MP4 → 자막 추가 + 업스케일링
 
-            conversion_mode.change(
-                fn=update_output_columns,
-                inputs=[conversion_mode, reactant_output_format],
-                outputs=[video_output_col, html_output_col]
-            )
+                        **기존 MP4 강의 영상**에 AI로 자막을 생성하고 화질을 개선합니다.
 
-            reactant_output_format.change(
-                fn=update_output_columns,
-                inputs=[conversion_mode, reactant_output_format],
-                outputs=[video_output_col, html_output_col]
-            )
+                        **워크플로우:**
+                        1. 음성 추출 (FFmpeg)
+                        2. 음성 → 텍스트 (OpenAI Whisper)
+                        3. 맞춤법 교정 (Claude AI)
+                        4. 자막 합성 (페이드 인/아웃)
+                        5. 미리보기 확인
+                        6. 업스케일링 + 최종 저장
 
-            # 1단계: 대본 생성 버튼 이벤트
-            script_btn.click(
-                fn=self.generate_scripts_only,
-                inputs=[
-                    pptx_input,
-                    output_name,
-                    custom_request,
-                    total_duration,
-                    enable_keyword_marking,
-                    keyword_mark_style
-                ],
-                outputs=[progress_output, script_output, video_btn]
-            )
+                        **비용:** Whisper $0.006/분 (40분 = 약 320원)
+                        """
+                    )
 
-            # 2단계: 영상 생성 버튼 이벤트
-            video_btn.click(
-                fn=self.generate_video_from_scripts,
-                inputs=[
-                    pptx_input,
-                    output_name,
-                    script_output,
-                    conversion_mode,
-                    reactant_output_format,
-                    voice_choice,
-                    resolution_choice,
-                    enable_subtitles,
-                    subtitle_font_size,
-                    transition_effect,
-                    transition_duration,
-                    video_quality,
-                    encoding_speed
-                ],
-                outputs=[progress_output, video_output, zip_download, html_preview]
-            )
+                    with gr.Row():
+                        with gr.Column(scale=1):
+                            gr.Markdown("### 📤 Step 1: 영상 업로드 & 자막 추출")
 
-            # ============================================================
-            # 탭 2: MP4 자막 모드 (강의 + 자막 생성)
-            # ============================================================
-            with gr.Tab("🎬 MP4 자막 모드 (강의 + 자막)"):
-                gr.Markdown(
-                    """
-                    ### MP4 → 자막 추가 + 업스케일링
+                            subtitle_mp4_input = gr.File(
+                                label="MP4 파일 업로드",
+                                file_types=[".mp4", ".avi", ".mov", ".mkv"],
+                                type="filepath"
+                            )
 
-                    **기존 MP4 강의 영상**에 AI로 자막을 생성하고 화질을 개선합니다.
+                            subtitle_upscale_target = gr.Dropdown(
+                                choices=["720p", "1080p", "1440p"],
+                                value="1080p",
+                                label="업스케일 목표 해상도",
+                                info="최종 출력 해상도"
+                            )
 
-                    **워크플로우:**
-                    1. 음성 추출 (FFmpeg)
-                    2. 음성 → 텍스트 (OpenAI Whisper)
-                    3. 맞춤법 교정 (Claude AI)
-                    4. 자막 합성 (페이드 인/아웃)
-                    5. 미리보기 확인
-                    6. 업스케일링 + 최종 저장
+                            subtitle_step1_btn = gr.Button("🎤 자막 추출 시작", variant="primary", size="lg")
 
-                    **비용:** Whisper $0.006/분 (40분 = 약 320원)
-                    """
-                )
+                            gr.Markdown("---")
+                            gr.Markdown("### 🎬 Step 2: 자막 합성")
+                            subtitle_step2_btn = gr.Button("📝 자막 합성 및 미리보기", variant="secondary", size="lg", interactive=False)
 
-                with gr.Row():
-                    with gr.Column(scale=1):
-                        gr.Markdown("### 📤 Step 1: 영상 업로드 & 자막 추출")
+                            gr.Markdown("---")
+                            gr.Markdown("### 📈 Step 3: 업스케일 및 저장")
+                            subtitle_step3_btn = gr.Button("🚀 업스케일 및 최종 저장", variant="secondary", size="lg", interactive=False)
 
-                        subtitle_mp4_input = gr.File(
-                            label="MP4 파일 업로드",
-                            file_types=[".mp4", ".avi", ".mov", ".mkv"],
-                            type="filepath"
-                        )
+                        with gr.Column(scale=2):
+                            subtitle_log = gr.Textbox(
+                                label="📋 처리 로그 (원본 자막 vs 교정된 자막)",
+                                lines=20,
+                                max_lines=30,
+                                elem_classes=["output-text"]
+                            )
 
-                        subtitle_upscale_target = gr.Dropdown(
-                            choices=["720p", "1080p", "1440p"],
-                            value="1080p",
-                            label="업스케일 목표 해상도",
-                            info="최종 출력 해상도"
-                        )
+                            gr.Markdown("### 🎥 미리보기 (업스케일 전)")
+                            subtitle_preview = gr.Video(label="자막 합성 미리보기")
 
-                        subtitle_step1_btn = gr.Button("🎤 자막 추출 시작", variant="primary", size="lg")
+                            gr.Markdown("### 📁 최종 출력")
+                            subtitle_final_output = gr.Video(label="최종 영상 (업스케일 완료)")
 
-                        gr.Markdown("---")
-                        gr.Markdown("### 🎬 Step 2: 자막 합성")
-                        subtitle_step2_btn = gr.Button("📝 자막 합성 및 미리보기", variant="secondary", size="lg", interactive=False)
+                    # Hidden states
+                    video_path_state = gr.State(value=None)
+                    segments_file_state = gr.State(value=None)
 
-                        gr.Markdown("---")
-                        gr.Markdown("### 📈 Step 3: 업스케일 및 저장")
-                        subtitle_step3_btn = gr.Button("🚀 업스케일 및 최종 저장", variant="secondary", size="lg", interactive=False)
+                    # Step 1: 자막 추출
+                    subtitle_step1_btn.click(
+                        fn=self.process_subtitle_mode_step1,
+                        inputs=[subtitle_mp4_input],
+                        outputs=[subtitle_log, video_path_state, segments_file_state, subtitle_step2_btn]
+                    )
 
-                    with gr.Column(scale=2):
-                        subtitle_log = gr.Textbox(
-                            label="📋 처리 로그 (원본 자막 vs 교정된 자막)",
-                            lines=20,
-                            max_lines=30,
-                            elem_classes=["output-text"]
-                        )
+                    # Step 2: 자막 합성 및 미리보기 (이전 로그 유지)
+                    subtitle_step2_btn.click(
+                        fn=self.process_subtitle_mode_step2,
+                        inputs=[video_path_state, segments_file_state, subtitle_upscale_target, subtitle_log],
+                        outputs=[subtitle_log, subtitle_preview, subtitle_step3_btn]
+                    )
 
-                        gr.Markdown("### 🎥 미리보기 (업스케일 전)")
-                        subtitle_preview = gr.Video(label="자막 합성 미리보기")
+                    # Step 3: 업스케일 및 최종 저장 (이전 로그 유지)
+                    subtitle_step3_btn.click(
+                        fn=self.process_subtitle_mode_step3,
+                        inputs=[subtitle_upscale_target, subtitle_log],
+                        outputs=[subtitle_log, subtitle_final_output]
+                    )
 
-                        gr.Markdown("### 📁 최종 출력")
-                        subtitle_final_output = gr.Video(label="최종 영상 (업스케일 완료)")
+                # ============================================================
+                # 탭 3: MP4 호환성 변환
+                # ============================================================
+                with gr.Tab("🔄 MP4 호환성 변환"):
+                    gr.Markdown(
+                        """
+                        ### MP4 호환성 변환
 
-                # Hidden states
-                video_path_state = gr.State(value=None)
-                segments_file_state = gr.State(value=None)
+                        **기존 MP4 파일**을 Windows Media Player에서도 재생되는 **호환성 높은 MP4**로 변환합니다.
+                        (핸드폰 카메라로 촬영한 것처럼 어디서든 재생 가능)
+                        """
+                    )
 
-                # Step 1: 자막 추출
-                subtitle_step1_btn.click(
-                    fn=self.process_subtitle_mode_step1,
-                    inputs=[subtitle_mp4_input],
-                    outputs=[subtitle_log, video_path_state, segments_file_state, subtitle_step2_btn]
-                )
+                    with gr.Row():
+                        with gr.Column(scale=1):
+                            mp4_input = gr.File(
+                                label="변환할 MP4 파일",
+                                file_types=[".mp4", ".avi", ".mov", ".mkv"],
+                                type="filepath"
+                            )
+                            convert_mp4_btn = gr.Button("🔄 호환성 변환", variant="secondary", size="lg")
 
-                # Step 2: 자막 합성 및 미리보기 (이전 로그 유지)
-                subtitle_step2_btn.click(
-                    fn=self.process_subtitle_mode_step2,
-                    inputs=[video_path_state, segments_file_state, subtitle_upscale_target, subtitle_log],
-                    outputs=[subtitle_log, subtitle_preview, subtitle_step3_btn]
-                )
+                        with gr.Column(scale=1):
+                            mp4_progress = gr.Textbox(
+                                label="변환 로그",
+                                lines=5,
+                                max_lines=10
+                            )
+                            mp4_output = gr.Video(label="변환된 영상")
 
-                # Step 3: 업스케일 및 최종 저장 (이전 로그 유지)
-                subtitle_step3_btn.click(
-                    fn=self.process_subtitle_mode_step3,
-                    inputs=[subtitle_upscale_target, subtitle_log],
-                    outputs=[subtitle_log, subtitle_final_output]
-                )
-
-            # ============================================================
-            # 탭 3: MP4 호환성 변환
-            # ============================================================
-            with gr.Tab("🔄 MP4 호환성 변환"):
-                gr.Markdown(
-                    """
-                    ### MP4 호환성 변환
-
-                    **기존 MP4 파일**을 Windows Media Player에서도 재생되는 **호환성 높은 MP4**로 변환합니다.
-                    (핸드폰 카메라로 촬영한 것처럼 어디서든 재생 가능)
-                    """
-                )
-
-                with gr.Row():
-                    with gr.Column(scale=1):
-                        mp4_input = gr.File(
-                            label="변환할 MP4 파일",
-                            file_types=[".mp4", ".avi", ".mov", ".mkv"],
-                            type="filepath"
-                        )
-                        convert_mp4_btn = gr.Button("🔄 호환성 변환", variant="secondary", size="lg")
-
-                    with gr.Column(scale=1):
-                        mp4_progress = gr.Textbox(
-                            label="변환 로그",
-                            lines=5,
-                            max_lines=10
-                        )
-                        mp4_output = gr.Video(label="변환된 영상")
-
-                convert_mp4_btn.click(
-                    fn=self.convert_to_compatible_mp4,
-                    inputs=[mp4_input],
-                    outputs=[mp4_progress, mp4_output]
-                )
+                    convert_mp4_btn.click(
+                        fn=self.convert_to_compatible_mp4,
+                        inputs=[mp4_input],
+                        outputs=[mp4_progress, mp4_output]
+                    )
 
             # ============================================================
             # 공통 정보 (탭 외부)
