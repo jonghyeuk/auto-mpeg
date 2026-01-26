@@ -1257,22 +1257,209 @@ class GradioUI:
         result = subprocess.run(cmd, capture_output=True, text=True)
         return result.returncode == 0
 
-    def transcribe_with_whisper(self, audio_path):
-        """OpenAI Whisper API로 음성을 텍스트로 변환"""
+    def get_audio_duration(self, audio_path):
+        """오디오 파일의 길이(초)를 반환"""
+        cmd = [
+            "ffprobe",
+            "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            str(audio_path)
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode == 0 and result.stdout.strip():
+            return float(result.stdout.strip())
+        return 0
+
+    def get_file_size_mb(self, file_path):
+        """파일 크기를 MB 단위로 반환"""
+        import os
+        return os.path.getsize(file_path) / (1024 * 1024)
+
+    def split_audio_into_chunks(self, audio_path, output_dir, chunk_duration=600):
+        """
+        오디오 파일을 지정된 길이(초)로 분할
+
+        Args:
+            audio_path: 원본 오디오 파일 경로
+            output_dir: 청크 파일을 저장할 디렉토리
+            chunk_duration: 각 청크의 길이 (기본값: 600초 = 10분)
+
+        Returns:
+            list: [(청크파일경로, 시작시간), ...] 형태의 리스트
+        """
+        from pathlib import Path
+
+        total_duration = self.get_audio_duration(audio_path)
+        if total_duration == 0:
+            return []
+
+        chunks = []
+        chunk_index = 0
+        start_time = 0
+
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        while start_time < total_duration:
+            chunk_path = output_dir / f"chunk_{chunk_index:03d}.wav"
+
+            # ffmpeg으로 청크 추출
+            cmd = [
+                "ffmpeg",
+                "-i", str(audio_path),
+                "-ss", str(start_time),  # 시작 시간
+                "-t", str(chunk_duration),  # 청크 길이
+                "-acodec", "pcm_s16le",
+                "-ar", "16000",
+                "-ac", "1",
+                "-y",
+                str(chunk_path)
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True)
+
+            if result.returncode == 0 and chunk_path.exists():
+                chunks.append((str(chunk_path), start_time))
+
+            start_time += chunk_duration
+            chunk_index += 1
+
+        return chunks
+
+    def transcribe_single_chunk(self, audio_path, max_retries=3):
+        """
+        단일 오디오 청크에 대해 Whisper API 호출 (재시도 로직 포함)
+
+        Args:
+            audio_path: 오디오 파일 경로
+            max_retries: 최대 재시도 횟수
+
+        Returns:
+            transcript 객체 또는 None (실패 시)
+        """
         from openai import OpenAI
+        import time
 
         client = OpenAI(api_key=config.OPENAI_API_KEY)
 
-        with open(audio_path, "rb") as audio_file:
-            transcript = client.audio.transcriptions.create(
-                model="whisper-1",
-                file=audio_file,
-                language="ko",
-                response_format="verbose_json",
-                timestamp_granularities=["segment"]
-            )
+        last_error = None
+        for attempt in range(max_retries):
+            try:
+                with open(audio_path, "rb") as audio_file:
+                    transcript = client.audio.transcriptions.create(
+                        model="whisper-1",
+                        file=audio_file,
+                        language="ko",
+                        response_format="verbose_json",
+                        timestamp_granularities=["segment"]
+                    )
+                return transcript
+            except Exception as e:
+                last_error = e
+                error_str = str(e)
 
-        return transcript
+                # 500/502/503 에러 또는 네트워크 오류인 경우 재시도
+                if "500" in error_str or "502" in error_str or "503" in error_str or "timeout" in error_str.lower():
+                    if attempt < max_retries - 1:
+                        wait_time = 2 ** (attempt + 1)
+                        print(f"  ⚠️ OpenAI 서버 오류 발생. {wait_time}초 후 재시도... (시도 {attempt + 1}/{max_retries})")
+                        time.sleep(wait_time)
+                        continue
+
+                # 재시도 불가능한 오류
+                raise
+
+        raise last_error
+
+    def transcribe_with_whisper(self, audio_path, max_retries=3, chunk_duration=600, log_callback=None):
+        """
+        OpenAI Whisper API로 음성을 텍스트로 변환
+        긴 파일(10분 초과 또는 20MB 초과)은 자동으로 청크로 분할하여 처리
+
+        Args:
+            audio_path: 오디오 파일 경로
+            max_retries: 최대 재시도 횟수
+            chunk_duration: 청크 길이 (기본값: 600초 = 10분)
+            log_callback: 로그 출력 콜백 함수 (선택)
+
+        Returns:
+            transcript 객체 (segments 속성 포함)
+        """
+        from pathlib import Path
+
+        audio_path = Path(audio_path)
+        duration = self.get_audio_duration(audio_path)
+        file_size_mb = self.get_file_size_mb(audio_path)
+
+        # 로그 출력 헬퍼
+        def log(msg):
+            if log_callback:
+                log_callback(msg)
+            else:
+                print(msg)
+
+        # 짧은 파일 (10분 이하 AND 20MB 이하): 단일 API 호출
+        if duration <= chunk_duration and file_size_mb <= 20:
+            log(f"  📁 오디오: {duration:.1f}초 ({file_size_mb:.1f}MB) - 단일 처리")
+            return self.transcribe_single_chunk(audio_path, max_retries)
+
+        # 긴 파일: 청크 분할 처리
+        log(f"  📁 오디오: {duration:.1f}초 ({file_size_mb:.1f}MB) - 청크 분할 처리")
+
+        # 청크 디렉토리 생성
+        chunk_dir = audio_path.parent / "audio_chunks"
+
+        # 청크 분할
+        chunks = self.split_audio_into_chunks(audio_path, chunk_dir, chunk_duration)
+        if not chunks:
+            raise Exception("오디오 청크 분할 실패")
+
+        log(f"  📦 {len(chunks)}개 청크로 분할됨")
+
+        # 각 청크 처리 및 결과 병합
+        all_segments = []
+
+        for i, (chunk_path, chunk_start_time) in enumerate(chunks):
+            log(f"  🎤 청크 {i+1}/{len(chunks)} 처리 중... (시작: {chunk_start_time:.0f}초)")
+
+            try:
+                chunk_transcript = self.transcribe_single_chunk(chunk_path, max_retries)
+
+                # 세그먼트 추출 및 타임스탬프 조정
+                if hasattr(chunk_transcript, 'segments') and chunk_transcript.segments:
+                    for seg in chunk_transcript.segments:
+                        # 타임스탬프를 원본 오디오 기준으로 조정
+                        adjusted_seg = {
+                            "start": (seg.start if hasattr(seg, 'start') else seg.get("start", 0)) + chunk_start_time,
+                            "end": (seg.end if hasattr(seg, 'end') else seg.get("end", 0)) + chunk_start_time,
+                            "text": seg.text if hasattr(seg, 'text') else seg.get("text", "")
+                        }
+                        all_segments.append(adjusted_seg)
+
+            except Exception as e:
+                log(f"  ⚠️ 청크 {i+1} 처리 실패: {str(e)}")
+                raise
+
+            # 청크 파일 정리
+            try:
+                Path(chunk_path).unlink()
+            except:
+                pass
+
+        # 청크 디렉토리 정리
+        try:
+            chunk_dir.rmdir()
+        except:
+            pass
+
+        log(f"  ✓ 총 {len(all_segments)}개 세그먼트 추출됨")
+
+        # 결과를 transcript 형태로 반환 (segments 속성을 가진 객체)
+        class MergedTranscript:
+            def __init__(self, segments):
+                self.segments = segments
+
+        return MergedTranscript(all_segments)
 
     def correct_spelling_with_claude(self, segments):
         """Claude API로 자막 맞춤법 교정"""
@@ -1527,7 +1714,21 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             # Step 2: Whisper STT
             log_output = self.log("", log_output)
             log_output = self.log("🎤 Step 2: 음성 인식 중 (OpenAI Whisper)...", log_output)
-            log_output = self.log("  (이 단계는 영상 길이에 따라 시간이 걸릴 수 있습니다)", log_output)
+
+            # 오디오 파일 정보 확인
+            audio_duration = self.get_audio_duration(audio_path)
+            audio_size_mb = self.get_file_size_mb(audio_path)
+            log_output = self.log(f"  📁 오디오: {audio_duration:.1f}초 ({audio_size_mb:.1f}MB)", log_output)
+
+            # 긴 파일인 경우 청크 처리 안내
+            if audio_duration > 600 or audio_size_mb > 20:
+                import math
+                chunk_count = math.ceil(audio_duration / 600)
+                log_output = self.log(f"  📦 긴 오디오 파일 감지 - {chunk_count}개 청크로 분할 처리", log_output)
+                log_output = self.log("  (각 청크별로 처리하므로 시간이 걸릴 수 있습니다)", log_output)
+            else:
+                log_output = self.log("  (이 단계는 영상 길이에 따라 시간이 걸릴 수 있습니다)", log_output)
+
             progress(0.3, desc="음성 인식 중...")
             yield log_output, None, None, gr.update(interactive=False)
 
@@ -1537,11 +1738,15 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             # segments를 딕셔너리 리스트로 변환
             segments_list = []
             for seg in segments:
-                segments_list.append({
-                    "start": seg.start if hasattr(seg, 'start') else seg.get("start", 0),
-                    "end": seg.end if hasattr(seg, 'end') else seg.get("end", 0),
-                    "text": seg.text if hasattr(seg, 'text') else seg.get("text", "")
-                })
+                # MergedTranscript는 딕셔너리를, 원본 API는 객체를 반환
+                if isinstance(seg, dict):
+                    segments_list.append(seg)
+                else:
+                    segments_list.append({
+                        "start": seg.start if hasattr(seg, 'start') else 0,
+                        "end": seg.end if hasattr(seg, 'end') else 0,
+                        "text": seg.text if hasattr(seg, 'text') else ""
+                    })
 
             log_output = self.log(f"  ✓ {len(segments_list)}개 자막 세그먼트 추출됨", log_output)
             yield log_output, None, None, gr.update(interactive=False)
@@ -1610,9 +1815,34 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             yield log_output, str(input_path), str(segments_file), gr.update(interactive=True)
 
         except Exception as e:
-            log_output = self.log(f"❌ 오류: {str(e)}", log_output)
+            error_str = str(e)
             import traceback
             traceback.print_exc()
+
+            # OpenAI 서버 에러 (500, 502, 503)
+            if "500" in error_str or "502" in error_str or "503" in error_str:
+                log_output = self.log("❌ OpenAI 서버 오류가 발생했습니다.", log_output)
+                log_output = self.log("   (3회 재시도 후에도 실패)", log_output)
+                log_output = self.log("", log_output)
+                log_output = self.log("💡 해결 방법:", log_output)
+                log_output = self.log("   1. OpenAI 서버 상태 확인: https://status.openai.com", log_output)
+                log_output = self.log("   2. 잠시 후 다시 시도해주세요", log_output)
+                log_output = self.log("   3. 오디오 파일이 25MB 이하인지 확인", log_output)
+            # OpenAI API 키 오류
+            elif "api_key" in error_str.lower() or "authentication" in error_str.lower() or "401" in error_str:
+                log_output = self.log("❌ OpenAI API 키 오류", log_output)
+                log_output = self.log("", log_output)
+                log_output = self.log("💡 .env 파일에서 OPENAI_API_KEY를 확인해주세요.", log_output)
+            # 파일 크기 제한 오류
+            elif "413" in error_str or "too large" in error_str.lower():
+                log_output = self.log("❌ 오디오 파일이 너무 큽니다.", log_output)
+                log_output = self.log("", log_output)
+                log_output = self.log("💡 Whisper API는 25MB 이하 파일만 지원합니다.", log_output)
+                log_output = self.log("   더 짧은 영상을 사용하거나 영상을 분할해주세요.", log_output)
+            # 기타 오류
+            else:
+                log_output = self.log(f"❌ 오류: {error_str}", log_output)
+
             yield log_output, None, None, gr.update(interactive=False)
 
     def process_subtitle_mode_step2(self, video_path_state, segments_file_state, upscale_target, previous_log="", progress=gr.Progress()):
