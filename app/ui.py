@@ -1722,7 +1722,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
             # 긴 파일인 경우 청크 처리 안내
             if audio_duration > 600 or audio_size_mb > 20:
-                chunk_count = int(audio_duration // 600) + 1
+                import math
+                chunk_count = math.ceil(audio_duration / 600)
                 log_output = self.log(f"  📦 긴 오디오 파일 감지 - {chunk_count}개 청크로 분할 처리", log_output)
                 log_output = self.log("  (각 청크별로 처리하므로 시간이 걸릴 수 있습니다)", log_output)
             else:
