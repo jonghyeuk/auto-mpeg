@@ -1524,10 +1524,17 @@ class GradioUI:
                 # 교정된 텍스트를 segments에 반영
                 for i, seg in enumerate(batch_segments):
                     corrected_seg = seg.copy()
+                    original_text = seg.get("text", "")
+
                     if i < len(corrected_texts):
-                        corrected_seg["corrected_text"] = corrected_texts[i]
+                        corrected_text = corrected_texts[i]
+                        # "..."가 있으면 원본 사용 (Claude가 생략한 경우)
+                        if "..." in corrected_text or "…" in corrected_text:
+                            corrected_seg["corrected_text"] = original_text
+                        else:
+                            corrected_seg["corrected_text"] = corrected_text
                     else:
-                        corrected_seg["corrected_text"] = seg.get("text", "")
+                        corrected_seg["corrected_text"] = original_text
                     all_corrected_segments.append(corrected_seg)
 
             except Exception as e:
