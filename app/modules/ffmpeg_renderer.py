@@ -829,6 +829,24 @@ class FFmpegRenderer:
             print(f"  ✗ 크롭 감지 오류: {e}")
             return None
 
+    def get_video_resolution(self, video_path: Path) -> tuple:
+        """비디오 해상도(너비, 높이) 반환"""
+        try:
+            cmd = [
+                "ffprobe",
+                "-v", "error",
+                "-select_streams", "v:0",
+                "-show_entries", "stream=width,height",
+                "-of", "csv=p=0",
+                str(video_path)
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            width, height = map(int, result.stdout.strip().split(','))
+            return width, height
+        except Exception as e:
+            print(f"  ⚠️ 해상도 조회 실패: {e}")
+            return None, None
+
     def crop_and_scale_video(
         self,
         input_video: Path,
@@ -836,7 +854,8 @@ class FFmpegRenderer:
         crop_params: Optional[Dict[str, int]] = None,
         target_width: Optional[int] = None,
         target_height: Optional[int] = None,
-        fit_to_height: bool = True
+        fit_to_height: bool = True,
+        vertical_only: bool = True
     ) -> bool:
         """
         비디오를 크롭하고 목표 해상도로 스케일
@@ -849,6 +868,7 @@ class FFmpegRenderer:
             target_width: 목표 너비 (None이면 self.width 사용)
             target_height: 목표 높이 (None이면 self.height 사용)
             fit_to_height: True면 높이에 맞춤 (가로 잘림 가능), False면 너비에 맞춤
+            vertical_only: True면 위아래만 크롭 (좌우는 원본 유지)
 
         Returns:
             성공 여부
@@ -867,10 +887,26 @@ class FFmpegRenderer:
                 shutil.copy(str(input_video), str(output_video))
                 return True
 
-            crop_w = crop_params["w"]
-            crop_h = crop_params["h"]
-            crop_x = crop_params["x"]
-            crop_y = crop_params["y"]
+            # 위아래만 크롭하는 경우: 원본 너비 사용
+            if vertical_only:
+                # 원본 비디오 해상도 가져오기
+                original_w, original_h = self.get_video_resolution(input_video)
+                if original_w and original_h:
+                    crop_w = original_w
+                    crop_x = 0
+                    crop_h = crop_params["h"]
+                    crop_y = crop_params["y"]
+                    print(f"  📐 위아래만 크롭: 원본 너비 {original_w} 유지, 높이 {crop_h} (y={crop_y})")
+                else:
+                    crop_w = crop_params["w"]
+                    crop_h = crop_params["h"]
+                    crop_x = crop_params["x"]
+                    crop_y = crop_params["y"]
+            else:
+                crop_w = crop_params["w"]
+                crop_h = crop_params["h"]
+                crop_x = crop_params["x"]
+                crop_y = crop_params["y"]
 
             # 스케일 계산
             if fit_to_height:
