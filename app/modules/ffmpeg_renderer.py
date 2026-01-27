@@ -799,7 +799,7 @@ class FFmpegRenderer:
                 "ffmpeg",
                 "-i", str(video_path),
                 "-t", str(sample_duration),  # 샘플 길이
-                "-vf", "cropdetect=24:16:0",  # limit=24 (밝기 임계값), round=16, reset=0
+                "-vf", "cropdetect=16:16:0",  # limit=16 (밝기 임계값 낮춤), round=16, reset=0
                 "-f", "null",
                 "-"
             ]
@@ -961,8 +961,7 @@ class FFmpegRenderer:
                 "-preset", self.preset,
                 "-crf", str(self.crf),
                 "-pix_fmt", "yuv420p",
-                "-c:a", "aac",
-                "-b:a", "192k",
+                "-c:a", "copy",  # 오디오 원본 그대로 복사
                 "-movflags", "+faststart",
                 str(output_video)
             ]
