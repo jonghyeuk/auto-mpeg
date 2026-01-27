@@ -1668,9 +1668,15 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
     def burn_subtitles_to_video(self, video_path, ass_path, output_path):
         """자막을 영상에 합성 (하드코딩)"""
-        # FFmpeg ass 필터에서 Windows 경로의 백슬래시를 슬래시로 변환
-        # (백슬래시는 FFmpeg 필터에서 이스케이프 문자로 해석됨)
-        ass_path_escaped = str(ass_path).replace("\\", "/")
+        import os
+
+        # FFmpeg ass 필터에서 Windows 경로 처리
+        ass_path_str = str(ass_path)
+        if os.name == 'nt':  # Windows
+            # 백슬래시를 슬래시로 변환하고, 콜론을 이스케이프 (C: -> C\:)
+            ass_path_escaped = ass_path_str.replace("\\", "/").replace(":", "\\:")
+        else:
+            ass_path_escaped = ass_path_str
 
         cmd = [
             "ffmpeg",
