@@ -1860,7 +1860,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             log_output = self.log("=" * 50, log_output)
             log_output = self.log("✅ 자막 추출 완료!", log_output)
             log_output = self.log("", log_output)
-            log_output = self.log("오른쪽 '교정된 자막'을 직접 수정할 수 있습니다.", log_output)
+            log_output = self.log("오른쪽에서 자막을 직접 수정할 수 있습니다.", log_output)
             log_output = self.log("수정 완료 후 'Step 2' 버튼을 눌러주세요.", log_output)
             log_output = self.log("=" * 50, log_output)
 
@@ -3094,7 +3094,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                             )
 
                             gr.Markdown("### ✏️ 자막 편집")
-                            gr.Markdown("*교정된 자막을 직접 수정하세요. 각 줄의 [시간] 형식은 유지해주세요.*")
+                            gr.Markdown("*자막을 직접 수정하세요. 각 줄의 [시간] 형식은 유지해주세요.*")
                             with gr.Row():
                                 with gr.Column():
                                     subtitle_original = gr.Textbox(
@@ -3105,7 +3105,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                                     )
                                 with gr.Column():
                                     subtitle_editor = gr.Textbox(
-                                        label="✏️ 교정된 자막 (편집 가능)",
+                                        label="✏️ 자막 편집",
                                         lines=15,
                                         max_lines=25,
                                         interactive=True
