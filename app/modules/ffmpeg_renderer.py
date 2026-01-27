@@ -782,6 +782,172 @@ class FFmpegRenderer:
 
         return success
 
+    def detect_crop_params(self, video_path: Path, sample_duration: float = 5.0) -> Optional[Dict[str, int]]:
+        """
+        비디오의 검은 바 영역을 감지하여 크롭 파라미터 반환
+
+        Args:
+            video_path: 입력 비디오 파일 경로
+            sample_duration: 분석할 샘플 길이 (초)
+
+        Returns:
+            크롭 파라미터 딕셔너리 {"w": width, "h": height, "x": x, "y": y} 또는 None (실패 시)
+        """
+        try:
+            # cropdetect 필터로 검은 바 영역 감지
+            cmd = [
+                "ffmpeg",
+                "-i", str(video_path),
+                "-t", str(sample_duration),  # 샘플 길이
+                "-vf", "cropdetect=24:16:0",  # limit=24 (밝기 임계값), round=16, reset=0
+                "-f", "null",
+                "-"
+            ]
+
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True
+            )
+
+            # stderr에서 crop 파라미터 추출 (마지막 감지값 사용)
+            # 형식: [Parsed_cropdetect_0 @ ...] x1:0 x2:1919 y1:56 y2:1023 w:1920 h:960 x:0 y:64 pts:... t:...
+            import re
+            crop_pattern = r"crop=(\d+):(\d+):(\d+):(\d+)"
+            matches = re.findall(crop_pattern, result.stderr)
+
+            if matches:
+                # 마지막 감지값 사용 (가장 안정적)
+                w, h, x, y = map(int, matches[-1])
+                print(f"  🔍 크롭 영역 감지: {w}x{h} at ({x}, {y})")
+                return {"w": w, "h": h, "x": x, "y": y}
+            else:
+                print(f"  ⚠️ 크롭 영역을 감지하지 못했습니다.")
+                return None
+
+        except Exception as e:
+            print(f"  ✗ 크롭 감지 오류: {e}")
+            return None
+
+    def crop_and_scale_video(
+        self,
+        input_video: Path,
+        output_video: Path,
+        crop_params: Optional[Dict[str, int]] = None,
+        target_width: Optional[int] = None,
+        target_height: Optional[int] = None,
+        fit_to_height: bool = True
+    ) -> bool:
+        """
+        비디오를 크롭하고 목표 해상도로 스케일
+
+        Args:
+            input_video: 입력 비디오 파일
+            output_video: 출력 비디오 파일
+            crop_params: 크롭 파라미터 {"w": width, "h": height, "x": x, "y": y}
+                        None이면 자동 감지
+            target_width: 목표 너비 (None이면 self.width 사용)
+            target_height: 목표 높이 (None이면 self.height 사용)
+            fit_to_height: True면 높이에 맞춤 (가로 잘림 가능), False면 너비에 맞춤
+
+        Returns:
+            성공 여부
+        """
+        try:
+            target_w = target_width or self.width
+            target_h = target_height or self.height
+
+            # 크롭 파라미터가 없으면 자동 감지
+            if crop_params is None:
+                print(f"크롭 영역 자동 감지 중...")
+                crop_params = self.detect_crop_params(input_video)
+
+            if crop_params is None:
+                print(f"  ⚠️ 크롭 파라미터를 얻을 수 없어 원본 복사")
+                shutil.copy(str(input_video), str(output_video))
+                return True
+
+            crop_w = crop_params["w"]
+            crop_h = crop_params["h"]
+            crop_x = crop_params["x"]
+            crop_y = crop_params["y"]
+
+            # 스케일 계산
+            if fit_to_height:
+                # Y축(높이)에 맞춤 - 가로가 넘치면 잘림
+                scale_factor = target_h / crop_h
+                scaled_w = int(crop_w * scale_factor)
+                scaled_h = target_h
+
+                # 스케일된 너비가 목표보다 작으면 너비에 맞춤
+                if scaled_w < target_w:
+                    scale_factor = target_w / crop_w
+                    scaled_w = target_w
+                    scaled_h = int(crop_h * scale_factor)
+            else:
+                # 너비에 맞춤
+                scale_factor = target_w / crop_w
+                scaled_w = target_w
+                scaled_h = int(crop_h * scale_factor)
+
+            print(f"  📐 크롭: {crop_w}x{crop_h} → 스케일: {scaled_w}x{scaled_h} → 출력: {target_w}x{target_h}")
+
+            # 필터 구성: crop → scale → 중앙 정렬 pad (필요시)
+            filter_parts = [
+                f"crop={crop_w}:{crop_h}:{crop_x}:{crop_y}",
+                f"scale={scaled_w}:{scaled_h}:flags=lanczos"
+            ]
+
+            # 스케일된 크기가 목표와 다르면 pad로 중앙 정렬 또는 crop으로 잘라냄
+            if scaled_w != target_w or scaled_h != target_h:
+                if scaled_w > target_w:
+                    # 가로가 넘치면 중앙에서 자르기
+                    x_offset = (scaled_w - target_w) // 2
+                    filter_parts.append(f"crop={target_w}:{target_h}:{x_offset}:0")
+                elif scaled_h > target_h:
+                    # 세로가 넘치면 중앙에서 자르기
+                    y_offset = (scaled_h - target_h) // 2
+                    filter_parts.append(f"crop={target_w}:{target_h}:0:{y_offset}")
+                else:
+                    # 작으면 pad로 검은 여백 추가 (가운데 정렬)
+                    filter_parts.append(f"pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2:black")
+
+            filter_complex = ",".join(filter_parts)
+
+            cmd = [
+                "ffmpeg",
+                "-y",
+                "-i", str(input_video),
+                "-vf", filter_complex,
+                "-c:v", "libx264",
+                "-profile:v", "main",
+                "-level", "4.0",
+                "-preset", self.preset,
+                "-crf", str(self.crf),
+                "-pix_fmt", "yuv420p",
+                "-c:a", "aac",
+                "-b:a", "192k",
+                "-movflags", "+faststart",
+                str(output_video)
+            ]
+
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=True
+            )
+
+            print(f"  ✓ 크롭 및 스케일 완료: {output_video}")
+            return True
+
+        except subprocess.CalledProcessError as e:
+            print(f"  ✗ 크롭/스케일 에러: {e.stderr}")
+            return False
+        except Exception as e:
+            print(f"  ✗ 크롭/스케일 처리 중 오류: {e}")
+            return False
+
     def print_video_info(self, video_path: Path):
         """영상 정보 출력"""
         try:
