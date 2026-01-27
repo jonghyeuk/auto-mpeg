@@ -799,7 +799,7 @@ class FFmpegRenderer:
                 "ffmpeg",
                 "-i", str(video_path),
                 "-t", str(sample_duration),  # 샘플 길이
-                "-vf", "cropdetect=24:16:0",  # limit=24 (밝기 임계값), round=16, reset=0
+                "-vf", "cropdetect=16:16:0",  # limit=16 (밝기 임계값 낮춤), round=16, reset=0
                 "-f", "null",
                 "-"
             ]
