@@ -2140,6 +2140,28 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
                 yield log_output, None, gr.update(interactive=False)
 
+            # 크롭 및 스케일 적용 (검은 바 제거)
+            log_output = self.log("", log_output)
+            log_output = self.log("✂️ 크롭 및 스케일 적용 중...", log_output)
+            progress(0.8, desc="크롭 및 스케일 적용 중...")
+            yield log_output, None, gr.update(interactive=False)
+
+            renderer = FFmpegRenderer()
+            cropped_path = temp_dir / "cropped_video.mp4"
+            crop_success = renderer.crop_and_scale_video(
+                input_video=final_video_path,
+                output_video=cropped_path,
+                fit_to_height=True
+            )
+
+            if crop_success and cropped_path.exists():
+                log_output = self.log("  ✓ 크롭 및 스케일 완료 (검은 바 제거)", log_output)
+                final_video_path = cropped_path
+            else:
+                log_output = self.log("  ⚠️ 크롭 스킵 (원본 유지)", log_output)
+
+            yield log_output, None, gr.update(interactive=False)
+
             # 미리보기 경로 저장
             preview_info = temp_dir / "preview_info.json"
             with open(preview_info, "w", encoding="utf-8") as f:
