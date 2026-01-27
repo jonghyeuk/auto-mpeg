@@ -1630,7 +1630,7 @@ WrapStyle: 0
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,Malgun Gothic,48,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,2,1,2,30,30,60,1
+Style: Default,Malgun Gothic,64,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,3,1,2,50,50,50,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -1696,6 +1696,141 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         ]
         result = subprocess.run(cmd, capture_output=True, text=True)
         return result.returncode == 0, result.stderr
+
+    def add_opening_closing(self, video_path, output_path, opening_image=None, closing_image=None, duration=3, fade_duration=1):
+        """오프닝/클로징 이미지를 영상 앞뒤에 추가 (페이드 효과)"""
+        import os
+        import tempfile
+
+        try:
+            # 원본 영상 정보 가져오기
+            probe_cmd = [
+                "ffprobe", "-v", "error",
+                "-select_streams", "v:0",
+                "-show_entries", "stream=width,height,r_frame_rate",
+                "-of", "csv=p=0",
+                str(video_path)
+            ]
+            probe_result = subprocess.run(probe_cmd, capture_output=True, text=True)
+            if probe_result.returncode != 0:
+                return False, "영상 정보 확인 실패"
+
+            parts = probe_result.stdout.strip().split(",")
+            width, height = int(parts[0]), int(parts[1])
+            fps = eval(parts[2]) if "/" in parts[2] else float(parts[2])
+
+            temp_dir = Path(video_path).parent
+            videos_to_concat = []
+
+            # 오프닝 이미지 -> 영상 변환 (페이드 아웃)
+            if opening_image:
+                opening_video = temp_dir / "opening_temp.mp4"
+                cmd = [
+                    "ffmpeg", "-y",
+                    "-loop", "1",
+                    "-i", str(opening_image),
+                    "-c:v", "libx264",
+                    "-t", str(duration),
+                    "-pix_fmt", "yuv420p",
+                    "-vf", f"scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,fade=t=out:st={duration-fade_duration}:d={fade_duration}",
+                    "-r", str(fps),
+                    str(opening_video)
+                ]
+                result = subprocess.run(cmd, capture_output=True, text=True)
+                if result.returncode == 0:
+                    videos_to_concat.append(str(opening_video))
+
+            # 메인 영상 (오프닝 있으면 페이드 인, 클로징 있으면 페이드 아웃)
+            main_video = video_path
+            if opening_image or closing_image:
+                # 메인 영상 길이 확인
+                duration_cmd = [
+                    "ffprobe", "-v", "error",
+                    "-show_entries", "format=duration",
+                    "-of", "csv=p=0",
+                    str(video_path)
+                ]
+                dur_result = subprocess.run(duration_cmd, capture_output=True, text=True)
+                main_duration = float(dur_result.stdout.strip())
+
+                fade_filters = []
+                if opening_image:
+                    fade_filters.append(f"fade=t=in:st=0:d={fade_duration}")
+                if closing_image:
+                    fade_filters.append(f"fade=t=out:st={main_duration-fade_duration}:d={fade_duration}")
+
+                if fade_filters:
+                    main_faded = temp_dir / "main_faded.mp4"
+                    cmd = [
+                        "ffmpeg", "-y",
+                        "-i", str(video_path),
+                        "-vf", ",".join(fade_filters),
+                        "-c:v", "libx264",
+                        "-preset", "medium",
+                        "-crf", "23",
+                        "-c:a", "aac",
+                        "-b:a", "192k",
+                        str(main_faded)
+                    ]
+                    result = subprocess.run(cmd, capture_output=True, text=True)
+                    if result.returncode == 0:
+                        main_video = main_faded
+
+            videos_to_concat.append(str(main_video))
+
+            # 클로징 이미지 -> 영상 변환 (페이드 인)
+            if closing_image:
+                closing_video = temp_dir / "closing_temp.mp4"
+                cmd = [
+                    "ffmpeg", "-y",
+                    "-loop", "1",
+                    "-i", str(closing_image),
+                    "-c:v", "libx264",
+                    "-t", str(duration),
+                    "-pix_fmt", "yuv420p",
+                    "-vf", f"scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,fade=t=in:st=0:d={fade_duration}",
+                    "-r", str(fps),
+                    str(closing_video)
+                ]
+                result = subprocess.run(cmd, capture_output=True, text=True)
+                if result.returncode == 0:
+                    videos_to_concat.append(str(closing_video))
+
+            # concat으로 합치기
+            if len(videos_to_concat) == 1:
+                # 오프닝/클로징 둘 다 실패한 경우
+                import shutil
+                shutil.copy(str(main_video), str(output_path))
+                return True, "원본 영상 사용"
+
+            # concat 파일 생성
+            concat_file = temp_dir / "concat_list.txt"
+            with open(concat_file, "w", encoding="utf-8") as f:
+                for v in videos_to_concat:
+                    f.write(f"file '{v}'\n")
+
+            cmd = [
+                "ffmpeg", "-y",
+                "-f", "concat",
+                "-safe", "0",
+                "-i", str(concat_file),
+                "-c:v", "libx264",
+                "-preset", "medium",
+                "-crf", "23",
+                "-c:a", "aac",
+                "-b:a", "192k",
+                "-movflags", "+faststart",
+                str(output_path)
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True)
+
+            if result.returncode == 0:
+                return True, "성공"
+            else:
+                return False, result.stderr[:500]
+
+        except Exception as e:
+            return False, str(e)
 
     def upscale_video(self, input_path, output_path, target_height=1080):
         """영상 업스케일링 (lanczos 알고리즘)"""
@@ -1898,9 +2033,9 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
             yield log_output, None, None, "", "", gr.update(interactive=False)
 
-    def process_subtitle_mode_step2(self, video_path_state, segments_file_state, upscale_target, previous_log="", edited_subtitle_text="", progress=gr.Progress()):
+    def process_subtitle_mode_step2(self, video_path_state, segments_file_state, upscale_target, previous_log="", edited_subtitle_text="", opening_image=None, closing_image=None, progress=gr.Progress()):
         """
-        자막 모드 Step 2: 자막 합성 → 미리보기 제공
+        자막 모드 Step 2: 자막 합성 → 오프닝/클로징 추가 → 미리보기 제공
         편집된 자막(Textbox)을 사용하여 처리
         """
         import re
@@ -1978,11 +2113,38 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             log_output = self.log("  ✓ 자막 합성 완료", log_output)
             yield log_output, None, gr.update(interactive=False)
 
+            # 오프닝/클로징 합성
+            final_video_path = subtitled_path
+            if opening_image or closing_image:
+                log_output = self.log("", log_output)
+                log_output = self.log("🎬 오프닝/클로징 합성 중...", log_output)
+                progress(0.6, desc="오프닝/클로징 합성 중...")
+                yield log_output, None, gr.update(interactive=False)
+
+                final_video_path = temp_dir / "final_with_intro.mp4"
+                success, msg = self.add_opening_closing(
+                    subtitled_path,
+                    final_video_path,
+                    opening_image,
+                    closing_image,
+                    duration=3,
+                    fade_duration=1
+                )
+
+                if success:
+                    log_output = self.log("  ✓ 오프닝/클로징 합성 완료", log_output)
+                else:
+                    log_output = self.log(f"  ⚠️ 오프닝/클로징 합성 실패: {msg}", log_output)
+                    log_output = self.log("  (자막만 적용된 영상으로 계속합니다)", log_output)
+                    final_video_path = subtitled_path
+
+                yield log_output, None, gr.update(interactive=False)
+
             # 미리보기 경로 저장
             preview_info = temp_dir / "preview_info.json"
             with open(preview_info, "w", encoding="utf-8") as f:
                 json.dump({
-                    "subtitled_path": str(subtitled_path),
+                    "subtitled_path": str(final_video_path),
                     "upscale_target": upscale_target
                 }, f)
 
@@ -1996,7 +2158,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             log_output = self.log("눌러 최종 영상을 생성하세요.", log_output)
             log_output = self.log("=" * 50, log_output)
 
-            yield log_output, str(subtitled_path), gr.update(interactive=True)
+            yield log_output, str(final_video_path), gr.update(interactive=True)
 
         except Exception as e:
             log_output = self.log(f"❌ 오류: {str(e)}", log_output)
@@ -3063,6 +3225,19 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                         with gr.Column(scale=1):
                             gr.Markdown("### 📤 Step 1: 영상 업로드 & 자막 추출")
 
+                            gr.Markdown("**오프닝/클로징 이미지 (선택사항)**")
+                            with gr.Row():
+                                opening_image = gr.File(
+                                    label="🎬 오프닝 이미지",
+                                    file_types=[".jpg", ".jpeg", ".png"],
+                                    type="filepath"
+                                )
+                                closing_image = gr.File(
+                                    label="🎬 클로징 이미지",
+                                    file_types=[".jpg", ".jpeg", ".png"],
+                                    type="filepath"
+                                )
+
                             subtitle_mp4_input = gr.File(
                                 label="MP4 파일 업로드",
                                 file_types=[".mp4", ".avi", ".mov", ".mkv"],
@@ -3129,10 +3304,10 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                         outputs=[subtitle_log, video_path_state, segments_file_state, subtitle_original, subtitle_editor, subtitle_step2_btn]
                     )
 
-                    # Step 2: 자막 합성 및 미리보기 (편집된 자막 사용)
+                    # Step 2: 자막 합성 및 미리보기 (편집된 자막 사용 + 오프닝/클로징)
                     subtitle_step2_btn.click(
                         fn=self.process_subtitle_mode_step2,
-                        inputs=[video_path_state, segments_file_state, subtitle_upscale_target, subtitle_log, subtitle_editor],
+                        inputs=[video_path_state, segments_file_state, subtitle_upscale_target, subtitle_log, subtitle_editor, opening_image, closing_image],
                         outputs=[subtitle_log, subtitle_preview, subtitle_step3_btn]
                     )
 
