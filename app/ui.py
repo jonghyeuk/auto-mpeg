@@ -1838,21 +1838,16 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             with open(video_info_file, "w", encoding="utf-8") as f:
                 json.dump({"input_path": str(input_path)}, f)
 
-            # 텍스트 형식으로 원본/교정 자막 생성
+            # 텍스트 형식으로 원본 자막 생성 (양쪽 동일하게 원본 표시)
             original_text_lines = []
-            corrected_text_lines = []
             for seg in formatted_segments:
                 start_str = f"[{seg['start']:.1f}s]"
-                # 원본 자막
                 original = seg.get("text", "")
                 original_text_lines.append(f"{start_str} {original}")
-                # 교정된 자막 (\N을 공백으로 변환)
-                corrected = seg.get("formatted_text", seg.get("corrected_text", original))
-                corrected = corrected.replace("\\N", " ")
-                corrected_text_lines.append(f"{start_str} {corrected}")
 
             original_textbox = "\n".join(original_text_lines)
-            corrected_textbox = "\n".join(corrected_text_lines)
+            # 편집창도 원본 그대로 표시 (사용자가 직접 편집)
+            corrected_textbox = original_textbox
 
             progress(1.0, desc="준비 완료")
 
