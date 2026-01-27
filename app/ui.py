@@ -2151,7 +2151,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             crop_success = renderer.crop_and_scale_video(
                 input_video=final_video_path,
                 output_video=cropped_path,
-                fit_to_height=True
+                fit_to_height=True,
+                vertical_only=False  # 좌우 검은 바도 제거
             )
 
             if crop_success and cropped_path.exists():
