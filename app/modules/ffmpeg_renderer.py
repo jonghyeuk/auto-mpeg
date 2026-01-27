@@ -961,8 +961,7 @@ class FFmpegRenderer:
                 "-preset", self.preset,
                 "-crf", str(self.crf),
                 "-pix_fmt", "yuv420p",
-                "-c:a", "aac",
-                "-b:a", "192k",
+                "-c:a", "copy",  # 오디오 원본 그대로 복사
                 "-movflags", "+faststart",
                 str(output_video)
             ]
