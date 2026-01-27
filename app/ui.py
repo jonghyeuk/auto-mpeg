@@ -1487,21 +1487,33 @@ class GradioUI:
             original_texts = [seg.get("text", "") for seg in batch_segments]
             combined_text = "\n".join([f"{i+1}. {text}" for i, text in enumerate(original_texts)])
 
-            prompt = f"""음성 인식(STT) 자막의 맞춤법만 교정하세요.
+            prompt = f"""당신은 맞춤법 교정기입니다. 입력된 문장의 맞춤법과 띄어쓰기만 수정하고, 나머지는 절대 변경하지 마세요.
 
-[필수 규칙]
-1. 입력된 문장을 100% 그대로 출력하되, 맞춤법/띄어쓰기만 수정
-2. 단어 추가/삭제 절대 금지
-3. "..." 사용 절대 금지 - 문장 전체를 빠짐없이 출력
-4. 요약/축약 절대 금지
-5. 구어체(~해가지고, ~거든요) 그대로 유지
+[절대 금지 사항]
+- 단어 추가 금지
+- 단어 삭제 금지
+- 문장 재구성 금지
+- 요약/축약 금지
+- "..." 또는 "…" 사용 금지
+- 내용 변경 금지
+
+[허용 사항]
+- 맞춤법 오류 수정 (예: 됬다→됐다)
+- 띄어쓰기 수정
+- 조사 수정 (예: 을→를)
+- 쉼표, 마침표 추가
+
+[중요]
+- 입력된 문장의 모든 단어를 그대로 유지하세요
+- 구어체(~해가지고, ~거든요, ~잖아요)는 그대로 유지하세요
+- 입력 문장 수와 출력 문장 수가 반드시 같아야 합니다
 
 [입력]
 {combined_text}
 
-[출력 형식]
-1. (첫번째 문장 전체)
-2. (두번째 문장 전체)"""
+[출력 형식] - 번호와 내용만 출력, 다른 설명 없이
+1. (첫번째 문장 - 모든 단어 유지)
+2. (두번째 문장 - 모든 단어 유지)"""
 
             try:
                 response = client.messages.create(
@@ -1528,9 +1540,26 @@ class GradioUI:
 
                     if i < len(corrected_texts):
                         corrected_text = corrected_texts[i]
-                        # "..."가 있으면 원본 사용 (Claude가 생략한 경우)
+
+                        # 검증 1: "..." 또는 "…" 포함 시 원본 사용
                         if "..." in corrected_text or "…" in corrected_text:
+                            print(f"    ⚠️ 세그먼트 {start_idx + i + 1}: 생략 감지 → 원본 사용")
                             corrected_seg["corrected_text"] = original_text
+                        # 검증 2: 길이 차이가 30% 이상이면 원본 사용
+                        elif len(original_text) > 0:
+                            length_ratio = len(corrected_text) / len(original_text)
+                            if length_ratio < 0.7 or length_ratio > 1.3:
+                                print(f"    ⚠️ 세그먼트 {start_idx + i + 1}: 길이 차이 ({length_ratio:.1%}) → 원본 사용")
+                                corrected_seg["corrected_text"] = original_text
+                            # 검증 3: 단어 수 차이가 2개 이상이면 원본 사용
+                            else:
+                                original_words = len(original_text.split())
+                                corrected_words = len(corrected_text.split())
+                                if abs(original_words - corrected_words) > 2:
+                                    print(f"    ⚠️ 세그먼트 {start_idx + i + 1}: 단어 수 차이 ({original_words}→{corrected_words}) → 원본 사용")
+                                    corrected_seg["corrected_text"] = original_text
+                                else:
+                                    corrected_seg["corrected_text"] = corrected_text
                         else:
                             corrected_seg["corrected_text"] = corrected_text
                     else:
