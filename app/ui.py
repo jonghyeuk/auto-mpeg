@@ -1819,19 +1819,14 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             log_output = self.log(f"  ✓ {len(segments_list)}개 자막 세그먼트 추출됨", log_output)
             yield log_output, None, None, "", "", gr.update(interactive=False)
 
-            # Step 3: 맞춤법 교정
-            log_output = self.log("", log_output)
-            log_output = self.log("✏️ Step 3: 맞춤법 교정 중 (Claude AI)...", log_output)
-            progress(0.6, desc="맞춤법 교정 중...")
-            yield log_output, None, None, "", "", gr.update(interactive=False)
+            # 원본 텍스트를 그대로 사용 (사용자가 직접 편집)
+            for seg in segments_list:
+                seg["corrected_text"] = seg.get("text", "")
 
-            corrected_segments = self.correct_spelling_with_claude(segments_list)
-
-            log_output = self.log("  ✓ 맞춤법 교정 완료", log_output)
-            yield log_output, None, None, "", "", gr.update(interactive=False)
+            progress(0.8, desc="자막 준비 중...")
 
             # 2줄 포맷팅
-            formatted_segments = self.format_subtitles_two_lines(corrected_segments)
+            formatted_segments = self.format_subtitles_two_lines(segments_list)
 
             # 세그먼트 데이터 저장 (Step 2에서 사용)
             segments_file = temp_dir / "segments.json"
