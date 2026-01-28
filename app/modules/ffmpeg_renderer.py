@@ -956,16 +956,17 @@ class FFmpegRenderer:
                 "ffmpeg",
                 "-y",
                 "-i", str(input_video),
-                "-filter_complex", f"[0:v]{filter_complex}[vout]",
-                "-map", "[vout]",  # 필터링된 비디오 스트림
-                "-map", "0:a",     # 원본 오디오 스트림 (그대로 유지)
+                "-vf", filter_complex,  # 비디오 필터만 적용
                 "-c:v", "libx264",
                 "-profile:v", "main",
                 "-level", "4.0",
                 "-preset", self.preset,
                 "-crf", str(self.crf),
                 "-pix_fmt", "yuv420p",
-                "-c:a", "copy",  # 오디오 원본 그대로 복사 (재인코딩 없음)
+                "-c:a", "aac",  # 오디오 재인코딩 (호환성)
+                "-b:a", "192k",
+                "-map", "0:v:0",  # 첫 번째 비디오 스트림
+                "-map", "0:a:0",  # 첫 번째 오디오 스트림
                 "-movflags", "+faststart",
                 str(output_video)
             ]
