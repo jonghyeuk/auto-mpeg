@@ -2091,25 +2091,53 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
             temp_dir = config.TEMP_DIR / "subtitle_mode"
             ass_path = temp_dir / "subtitles.ass"
+            cropped_path = temp_dir / "cropped_video.mp4"
             subtitled_path = temp_dir / "subtitled_video.mp4"
 
-            # Step 1: ASS 자막 생성
-            log_output = self.log("📝 Step 1: ASS 자막 파일 생성 중...", log_output)
-            progress(0.1, desc="자막 파일 생성 중...")
+            # Step 1: 크롭 및 스케일 적용 (검은 바 제거) - 자막 합성 전에 먼저 수행
+            log_output = self.log("✂️ Step 1: 크롭 및 스케일 적용 중...", log_output)
+            progress(0.1, desc="크롭 및 스케일 적용 중...")
+            yield log_output, None, gr.update(interactive=False)
+
+            renderer = FFmpegRenderer()
+            # 하드코딩된 크롭 값 사용 (위 8px, 아래 20px, 좌우 96px - 1280x720 기준)
+            # 720 - 8 - 20 = 692, 1280 - 96 - 96 = 1088
+            hardcoded_crop = {"w": 1088, "h": 692, "x": 96, "y": 8}
+            crop_success = renderer.crop_and_scale_video(
+                input_video=input_path,
+                output_video=cropped_path,
+                crop_params=hardcoded_crop,
+                fit_to_height=True,
+                vertical_only=False
+            )
+
+            if crop_success and cropped_path.exists():
+                log_output = self.log("  ✓ 크롭 완료 (위 8px, 아래 20px, 좌우 96px 제거)", log_output)
+                video_for_subtitle = cropped_path
+            else:
+                log_output = self.log("  ⚠️ 크롭 스킵 (원본 사용)", log_output)
+                video_for_subtitle = input_path
+
+            yield log_output, None, gr.update(interactive=False)
+
+            # Step 2: ASS 자막 생성
+            log_output = self.log("", log_output)
+            log_output = self.log("📝 Step 2: ASS 자막 파일 생성 중...", log_output)
+            progress(0.3, desc="자막 파일 생성 중...")
             yield log_output, None, gr.update(interactive=False)
 
             self.generate_ass_subtitles(segments, ass_path)
             log_output = self.log("  ✓ 자막 파일 생성 완료 (페이드 효과 적용)", log_output)
             yield log_output, None, gr.update(interactive=False)
 
-            # Step 2: 자막 합성
+            # Step 3: 자막 합성 (크롭된 영상에 합성)
             log_output = self.log("", log_output)
-            log_output = self.log("🎬 Step 2: 영상에 자막 합성 중...", log_output)
+            log_output = self.log("🎬 Step 3: 영상에 자막 합성 중...", log_output)
             log_output = self.log("  (영상 길이에 따라 시간이 걸립니다)", log_output)
-            progress(0.3, desc="자막 합성 중...")
+            progress(0.5, desc="자막 합성 중...")
             yield log_output, None, gr.update(interactive=False)
 
-            success, msg = self.burn_subtitles_to_video(input_path, ass_path, subtitled_path)
+            success, msg = self.burn_subtitles_to_video(video_for_subtitle, ass_path, subtitled_path)
 
             if not success:
                 log_output = self.log(f"❌ 자막 합성 실패: {msg}", log_output)
@@ -2119,12 +2147,12 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             log_output = self.log("  ✓ 자막 합성 완료", log_output)
             yield log_output, None, gr.update(interactive=False)
 
-            # 오프닝/클로징 합성
+            # Step 4: 오프닝/클로징 합성
             final_video_path = subtitled_path
             if opening_image or closing_image:
                 log_output = self.log("", log_output)
-                log_output = self.log("🎬 오프닝/클로징 합성 중...", log_output)
-                progress(0.6, desc="오프닝/클로징 합성 중...")
+                log_output = self.log("🎬 Step 4: 오프닝/클로징 합성 중...", log_output)
+                progress(0.8, desc="오프닝/클로징 합성 중...")
                 yield log_output, None, gr.update(interactive=False)
 
                 final_video_path = temp_dir / "final_with_intro.mp4"
@@ -2145,27 +2173,6 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                     final_video_path = subtitled_path
 
                 yield log_output, None, gr.update(interactive=False)
-
-            # 크롭 및 스케일 적용 (검은 바 제거)
-            log_output = self.log("", log_output)
-            log_output = self.log("✂️ 크롭 및 스케일 적용 중...", log_output)
-            progress(0.8, desc="크롭 및 스케일 적용 중...")
-            yield log_output, None, gr.update(interactive=False)
-
-            renderer = FFmpegRenderer()
-            cropped_path = temp_dir / "cropped_video.mp4"
-            crop_success = renderer.crop_and_scale_video(
-                input_video=final_video_path,
-                output_video=cropped_path,
-                fit_to_height=True,
-                vertical_only=False  # 좌우 검은 바도 제거
-            )
-
-            if crop_success and cropped_path.exists():
-                log_output = self.log("  ✓ 크롭 및 스케일 완료 (검은 바 제거)", log_output)
-                final_video_path = cropped_path
-            else:
-                log_output = self.log("  ⚠️ 크롭 스킵 (원본 유지)", log_output)
 
             yield log_output, None, gr.update(interactive=False)
 
