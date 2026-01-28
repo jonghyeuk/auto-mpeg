@@ -966,7 +966,7 @@ class FFmpegRenderer:
                 "-c:a", "aac",  # 오디오 재인코딩 (호환성)
                 "-b:a", "192k",
                 "-map", "0:v:0",  # 첫 번째 비디오 스트림
-                "-map", "0:a:0",  # 첫 번째 오디오 스트림
+                "-map", "0:a:0?",  # 첫 번째 오디오 스트림 (없으면 무시)
                 "-movflags", "+faststart",
                 str(output_video)
             ]
