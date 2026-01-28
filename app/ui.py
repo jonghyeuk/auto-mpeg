@@ -1722,17 +1722,20 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             temp_dir = Path(video_path).parent
             videos_to_concat = []
 
-            # 오프닝 이미지 -> 영상 변환 (페이드 아웃)
+            # 오프닝 이미지 -> 영상 변환 (페이드 아웃 + 무음 오디오)
             if opening_image:
                 opening_video = temp_dir / "opening_temp.mp4"
                 cmd = [
                     "ffmpeg", "-y",
                     "-loop", "1",
                     "-i", str(opening_image),
+                    "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",  # 무음 오디오
                     "-c:v", "libx264",
                     "-t", str(duration),
                     "-pix_fmt", "yuv420p",
                     "-vf", f"scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,fade=t=out:st={duration-fade_duration}:d={fade_duration}",
+                    "-c:a", "aac", "-b:a", "192k",  # 오디오 코덱
+                    "-shortest",  # 비디오 길이에 맞춤
                     "-r", str(fps),
                     str(opening_video)
                 ]
@@ -1778,17 +1781,20 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
             videos_to_concat.append(str(main_video))
 
-            # 클로징 이미지 -> 영상 변환 (페이드 인)
+            # 클로징 이미지 -> 영상 변환 (페이드 인 + 무음 오디오)
             if closing_image:
                 closing_video = temp_dir / "closing_temp.mp4"
                 cmd = [
                     "ffmpeg", "-y",
                     "-loop", "1",
                     "-i", str(closing_image),
+                    "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",  # 무음 오디오
                     "-c:v", "libx264",
                     "-t", str(duration),
                     "-pix_fmt", "yuv420p",
                     "-vf", f"scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,fade=t=in:st=0:d={fade_duration}",
+                    "-c:a", "aac", "-b:a", "192k",  # 오디오 코덱
+                    "-shortest",  # 비디오 길이에 맞춤
                     "-r", str(fps),
                     str(closing_video)
                 ]
