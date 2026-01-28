@@ -795,8 +795,10 @@ class FFmpegRenderer:
         """
         try:
             # cropdetect 필터로 검은 바 영역 감지
+            # 영상 시작 부분(썸네일 있을 수 있음) 건너뛰고 60초 이후부터 샘플링
             cmd = [
                 "ffmpeg",
+                "-ss", "60",  # 60초부터 시작 (썸네일 없는 구간)
                 "-i", str(video_path),
                 "-t", str(sample_duration),  # 샘플 길이
                 "-vf", "cropdetect=16:16:0",  # limit=16 (밝기 임계값 낮춤), round=16, reset=0
@@ -954,14 +956,16 @@ class FFmpegRenderer:
                 "ffmpeg",
                 "-y",
                 "-i", str(input_video),
-                "-vf", filter_complex,
+                "-filter_complex", f"[0:v]{filter_complex}[vout]",
+                "-map", "[vout]",  # 필터링된 비디오 스트림
+                "-map", "0:a",     # 원본 오디오 스트림 (그대로 유지)
                 "-c:v", "libx264",
                 "-profile:v", "main",
                 "-level", "4.0",
                 "-preset", self.preset,
                 "-crf", str(self.crf),
                 "-pix_fmt", "yuv420p",
-                "-c:a", "copy",  # 오디오 원본 그대로 복사
+                "-c:a", "copy",  # 오디오 원본 그대로 복사 (재인코딩 없음)
                 "-movflags", "+faststart",
                 str(output_video)
             ]
