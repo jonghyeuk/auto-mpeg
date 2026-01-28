@@ -36,6 +36,51 @@ class FFmpegRenderer:
         self.fps = fps
         self.preset = preset
         self.crf = crf
+        self._nvenc_available = None  # 캐시
+
+    def is_nvenc_available(self) -> bool:
+        """NVIDIA GPU 인코딩(NVENC) 사용 가능 여부 확인"""
+        if self._nvenc_available is not None:
+            return self._nvenc_available
+
+        try:
+            # ffmpeg에서 nvenc 인코더 확인
+            result = subprocess.run(
+                ["ffmpeg", "-hide_banner", "-encoders"],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            self._nvenc_available = "h264_nvenc" in result.stdout
+            if self._nvenc_available:
+                print("🚀 NVIDIA GPU 인코딩(NVENC) 사용 가능 - 빠른 인코딩!")
+            return self._nvenc_available
+        except Exception:
+            self._nvenc_available = False
+            return False
+
+    def get_video_encoder_args(self) -> list:
+        """비디오 인코더 인자 반환 (NVENC 우선, 없으면 libx264)"""
+        if self.is_nvenc_available():
+            # NVENC 사용 (GPU 인코딩) - 훨씬 빠름
+            return [
+                "-c:v", "h264_nvenc",
+                "-preset", "p4",  # NVENC preset (p1~p7, p4가 균형)
+                "-cq", str(self.crf),  # 품질 설정
+                "-profile:v", "main",
+                "-level", "4.0",
+                "-pix_fmt", "yuv420p",
+            ]
+        else:
+            # CPU 인코딩 (기본)
+            return [
+                "-c:v", "libx264",
+                "-preset", self.preset,
+                "-crf", str(self.crf),
+                "-profile:v", "main",
+                "-level", "4.0",
+                "-pix_fmt", "yuv420p",
+            ]
 
     def create_slide_clip(
         self,
@@ -952,17 +997,15 @@ class FFmpegRenderer:
 
             filter_complex = ",".join(filter_parts)
 
+            # GPU/CPU 인코더 선택
+            encoder_args = self.get_video_encoder_args()
+
             cmd = [
                 "ffmpeg",
                 "-y",
                 "-i", str(input_video),
                 "-vf", filter_complex,  # 비디오 필터만 적용
-                "-c:v", "libx264",
-                "-profile:v", "main",
-                "-level", "4.0",
-                "-preset", self.preset,
-                "-crf", str(self.crf),
-                "-pix_fmt", "yuv420p",
+            ] + encoder_args + [
                 "-c:a", "aac",  # 오디오 재인코딩 (호환성)
                 "-b:a", "192k",
                 "-map", "0:v:0",  # 첫 번째 비디오 스트림

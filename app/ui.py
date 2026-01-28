@@ -1667,7 +1667,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         return output_path
 
     def burn_subtitles_to_video(self, video_path, ass_path, output_path):
-        """자막을 영상에 합성 (하드코딩)"""
+        """자막을 영상에 합성 (하드코딩) - GPU 인코딩 지원"""
         import os
 
         # FFmpeg ass 필터에서 Windows 경로 처리
@@ -1678,16 +1678,15 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         else:
             ass_path_escaped = ass_path_str
 
+        # GPU/CPU 인코더 선택
+        renderer = FFmpegRenderer()
+        encoder_args = renderer.get_video_encoder_args()
+
         cmd = [
             "ffmpeg",
             "-i", str(video_path),
             "-vf", f"ass='{ass_path_escaped}'",
-            "-c:v", "libx264",
-            "-profile:v", "main",
-            "-level", "4.0",
-            "-preset", "medium",
-            "-crf", "23",
-            "-pix_fmt", "yuv420p",
+        ] + encoder_args + [
             "-c:a", "aac",
             "-b:a", "192k",
             "-movflags", "+faststart",
@@ -1698,11 +1697,15 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         return result.returncode == 0, result.stderr
 
     def add_opening_closing(self, video_path, output_path, opening_image=None, closing_image=None, duration=3, fade_duration=1):
-        """오프닝/클로징 이미지를 영상 앞뒤에 추가 (페이드 효과)"""
+        """오프닝/클로징 이미지를 영상 앞뒤에 추가 (페이드 효과) - GPU 인코딩 지원"""
         import os
         import tempfile
 
         try:
+            # GPU/CPU 인코더 선택
+            renderer = FFmpegRenderer()
+            encoder_args = renderer.get_video_encoder_args()
+
             # 원본 영상 정보 가져오기
             probe_cmd = [
                 "ffprobe", "-v", "error",
@@ -1730,12 +1733,11 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                     "-loop", "1",
                     "-i", str(opening_image),
                     "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",  # 무음 오디오
-                    "-c:v", "libx264",
                     "-t", str(duration),
-                    "-pix_fmt", "yuv420p",
                     "-vf", f"scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,fade=t=out:st={duration-fade_duration}:d={fade_duration}",
-                    "-c:a", "aac", "-b:a", "192k",  # 오디오 코덱
-                    "-shortest",  # 비디오 길이에 맞춤
+                ] + encoder_args + [
+                    "-c:a", "aac", "-b:a", "192k",
+                    "-shortest",
                     "-r", str(fps),
                     str(opening_video)
                 ]
@@ -1768,9 +1770,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                         "ffmpeg", "-y",
                         "-i", str(video_path),
                         "-vf", ",".join(fade_filters),
-                        "-c:v", "libx264",
-                        "-preset", "medium",
-                        "-crf", "23",
+                    ] + encoder_args + [
                         "-c:a", "aac",
                         "-b:a", "192k",
                         str(main_faded)
@@ -1789,12 +1789,11 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                     "-loop", "1",
                     "-i", str(closing_image),
                     "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",  # 무음 오디오
-                    "-c:v", "libx264",
                     "-t", str(duration),
-                    "-pix_fmt", "yuv420p",
                     "-vf", f"scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,fade=t=in:st=0:d={fade_duration}",
-                    "-c:a", "aac", "-b:a", "192k",  # 오디오 코덱
-                    "-shortest",  # 비디오 길이에 맞춤
+                ] + encoder_args + [
+                    "-c:a", "aac", "-b:a", "192k",
+                    "-shortest",
                     "-r", str(fps),
                     str(closing_video)
                 ]
@@ -1820,9 +1819,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 "-f", "concat",
                 "-safe", "0",
                 "-i", str(concat_file),
-                "-c:v", "libx264",
-                "-preset", "medium",
-                "-crf", "23",
+            ] + encoder_args + [
                 "-c:a", "aac",
                 "-b:a", "192k",
                 "-movflags", "+faststart",
@@ -1870,16 +1867,15 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         # 짝수로 맞추기
         new_width = new_width + (new_width % 2)
 
+        # GPU/CPU 인코더 선택
+        renderer = FFmpegRenderer(crf=20)  # 업스케일 시 약간 높은 품질
+        encoder_args = renderer.get_video_encoder_args()
+
         cmd = [
             "ffmpeg",
             "-i", str(input_path),
             "-vf", f"scale={new_width}:{target_height}:flags=lanczos",
-            "-c:v", "libx264",
-            "-profile:v", "main",
-            "-level", "4.0",
-            "-preset", "medium",
-            "-crf", "20",  # 업스케일 시 약간 높은 품질
-            "-pix_fmt", "yuv420p",
+        ] + encoder_args + [
             "-c:a", "copy",
             "-movflags", "+faststart",
             "-y",
