@@ -1576,65 +1576,46 @@ class GradioUI:
 
         return all_corrected_segments
 
-    def format_subtitles_two_lines(self, segments, max_chars_per_line=16):
+    def format_subtitles_two_lines(self, segments, max_chars_per_line=20):
         """
-        스마트 자막 분할 (코딩왕자 추천)
-        - 한 줄: 16자 (한글 기준 최적)
-        - 2줄까지: 한 화면에 표시 (ASS \\N)
-        - 3줄 이상: 세그먼트 분할 (시간도 나눔)
+        자막 포맷팅 (세그먼트 분할 없음, 줄바꿈만)
+        - 편집창: 원본 Whisper 세그먼트 유지
+        - formatted_text: 최대 2줄로 줄바꿈 (ASS용)
         """
         import textwrap
 
-        new_segments = []
+        formatted_segments = []
 
         for seg in segments:
             text = seg.get("corrected_text", seg.get("text", "")).strip()
+            seg_copy = seg.copy()
 
-            # 1. 짧으면 그대로
+            # 짧으면 그대로
             if len(text) <= max_chars_per_line:
-                seg_copy = seg.copy()
                 seg_copy["formatted_text"] = text
-                new_segments.append(seg_copy)
+                formatted_segments.append(seg_copy)
                 continue
 
-            # 2. textwrap으로 자연스러운 분할 (공백 기준)
+            # textwrap으로 줄바꿈 (공백 기준)
             lines = textwrap.wrap(text, width=max_chars_per_line, break_long_words=False)
 
-            # 3. 공백 없어서 한 줄이 여전히 길면 강제 분할 (한글 전용)
-            final_lines = []
-            for line in lines:
-                if len(line) > max_chars_per_line + 5:  # 허용치 초과
-                    # 글자 단위로 강제 분할
-                    final_lines.extend([line[i:i+max_chars_per_line] for i in range(0, len(line), max_chars_per_line)])
-                else:
-                    final_lines.append(line)
+            # 공백 없어서 분할 안 되면 강제 분할
+            if len(lines) == 1 and len(text) > max_chars_per_line:
+                # 중간에서 강제로 나눔
+                mid = len(text) // 2
+                lines = [text[:mid], text[mid:]]
 
-            # 4. 세그먼트 배분
-            if len(final_lines) <= 2:
-                # 2줄 이하: 한 화면에 표시
-                seg_copy = seg.copy()
-                seg_copy["formatted_text"] = "\\N".join(final_lines)
-                new_segments.append(seg_copy)
-            else:
-                # 3줄 이상: 세그먼트 분할 (시간도 나눔)
-                duration = seg.get('end', 0) - seg.get('start', 0)
-                if duration <= 0:
-                    duration = 3  # 기본값
+            # 최대 2줄만 사용 (3줄 이상이면 앞 2줄만)
+            if len(lines) > 2:
+                lines = lines[:2]
+                # 두 번째 줄 끝에 ... 추가 (잘렸음을 표시)
+                if len(lines[1]) > max_chars_per_line - 3:
+                    lines[1] = lines[1][:max_chars_per_line-3] + "..."
 
-                # 2줄씩 묶어서 새 세그먼트 생성
-                num_pairs = (len(final_lines) + 1) // 2
-                per_pair_duration = duration / num_pairs
+            seg_copy["formatted_text"] = "\\N".join(lines)
+            formatted_segments.append(seg_copy)
 
-                for i in range(0, len(final_lines), 2):
-                    pair = final_lines[i:i+2]
-                    new_seg = seg.copy()
-                    pair_index = i // 2
-                    new_seg['start'] = seg.get('start', 0) + (pair_index * per_pair_duration)
-                    new_seg['end'] = min(seg.get('end', 0), new_seg['start'] + per_pair_duration)
-                    new_seg['formatted_text'] = "\\N".join(pair)
-                    new_segments.append(new_seg)
-
-        return new_segments
+        return formatted_segments
 
     def generate_ass_subtitles(self, segments, output_path, video_width=1920, video_height=1080):
         """ASS 자막 파일 생성 (스마트 페이드 - 깜빡임 방지)"""
