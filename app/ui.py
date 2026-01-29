@@ -2096,19 +2096,17 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             yield log_output, None, gr.update(interactive=False)
 
             renderer = FFmpegRenderer()
-            # 하드코딩된 크롭 값 사용 (위 8px, 아래 20px, 좌우 96px - 1280x720 기준)
-            # 720 - 8 - 20 = 692, 1280 - 96 - 96 = 1088
-            hardcoded_crop = {"w": 1088, "h": 692, "x": 96, "y": 8}
+            # 자동 감지로 크롭 (영상마다 다른 레이아웃 대응)
             crop_success = renderer.crop_and_scale_video(
                 input_video=input_path,
                 output_video=cropped_path,
-                crop_params=hardcoded_crop,
+                crop_params=None,  # 자동 감지
                 fit_to_height=True,
                 vertical_only=False
             )
 
             if crop_success and cropped_path.exists():
-                log_output = self.log("  ✓ 크롭 완료 (위 8px, 아래 20px, 좌우 96px 제거)", log_output)
+                log_output = self.log("  ✓ 크롭 완료 (자동 감지)", log_output)
                 video_for_subtitle = cropped_path
             else:
                 log_output = self.log("  ⚠️ 크롭 스킵 (원본 사용)", log_output)
