@@ -1576,46 +1576,65 @@ class GradioUI:
 
         return all_corrected_segments
 
-    def format_subtitles_two_lines(self, segments, max_chars_per_line=25):
-        """자막을 2줄로 포맷팅 (3줄 이상 방지)"""
-        formatted_segments = []
+    def format_subtitles_two_lines(self, segments, max_chars_per_line=16):
+        """
+        스마트 자막 분할 (코딩왕자 추천)
+        - 한 줄: 16자 (한글 기준 최적)
+        - 2줄까지: 한 화면에 표시 (ASS \\N)
+        - 3줄 이상: 세그먼트 분할 (시간도 나눔)
+        """
+        import textwrap
+
+        new_segments = []
 
         for seg in segments:
-            text = seg.get("corrected_text", seg.get("text", ""))
+            text = seg.get("corrected_text", seg.get("text", "")).strip()
 
-            # 텍스트가 너무 길면 2줄로 분할
-            if len(text) > max_chars_per_line:
-                # 중간 지점에서 자연스럽게 분할
-                words = text.split()
-                mid = len(text) // 2
+            # 1. 짧으면 그대로
+            if len(text) <= max_chars_per_line:
+                seg_copy = seg.copy()
+                seg_copy["formatted_text"] = text
+                new_segments.append(seg_copy)
+                continue
 
-                # 공백 기준으로 분할점 찾기
-                best_split = mid
-                for i, char in enumerate(text):
-                    if char == ' ' and abs(i - mid) < abs(best_split - mid):
-                        best_split = i
+            # 2. textwrap으로 자연스러운 분할 (공백 기준)
+            lines = textwrap.wrap(text, width=max_chars_per_line, break_long_words=False)
 
-                if best_split > 0 and best_split < len(text):
-                    line1 = text[:best_split].strip()
-                    line2 = text[best_split:].strip()
-
-                    # 각 줄이 너무 길면 자르기
-                    if len(line1) > max_chars_per_line:
-                        line1 = line1[:max_chars_per_line-3] + "..."
-                    if len(line2) > max_chars_per_line:
-                        line2 = line2[:max_chars_per_line-3] + "..."
-
-                    formatted_text = f"{line1}\\N{line2}"
+            # 3. 공백 없어서 한 줄이 여전히 길면 강제 분할 (한글 전용)
+            final_lines = []
+            for line in lines:
+                if len(line) > max_chars_per_line + 5:  # 허용치 초과
+                    # 글자 단위로 강제 분할
+                    final_lines.extend([line[i:i+max_chars_per_line] for i in range(0, len(line), max_chars_per_line)])
                 else:
-                    formatted_text = text[:max_chars_per_line*2]
+                    final_lines.append(line)
+
+            # 4. 세그먼트 배분
+            if len(final_lines) <= 2:
+                # 2줄 이하: 한 화면에 표시
+                seg_copy = seg.copy()
+                seg_copy["formatted_text"] = "\\N".join(final_lines)
+                new_segments.append(seg_copy)
             else:
-                formatted_text = text
+                # 3줄 이상: 세그먼트 분할 (시간도 나눔)
+                duration = seg.get('end', 0) - seg.get('start', 0)
+                if duration <= 0:
+                    duration = 3  # 기본값
 
-            formatted_seg = seg.copy()
-            formatted_seg["formatted_text"] = formatted_text
-            formatted_segments.append(formatted_seg)
+                # 2줄씩 묶어서 새 세그먼트 생성
+                num_pairs = (len(final_lines) + 1) // 2
+                per_pair_duration = duration / num_pairs
 
-        return formatted_segments
+                for i in range(0, len(final_lines), 2):
+                    pair = final_lines[i:i+2]
+                    new_seg = seg.copy()
+                    pair_index = i // 2
+                    new_seg['start'] = seg.get('start', 0) + (pair_index * per_pair_duration)
+                    new_seg['end'] = min(seg.get('end', 0), new_seg['start'] + per_pair_duration)
+                    new_seg['formatted_text'] = "\\N".join(pair)
+                    new_segments.append(new_seg)
+
+        return new_segments
 
     def generate_ass_subtitles(self, segments, output_path, video_width=1920, video_height=1080):
         """ASS 자막 파일 생성 (페이드 인/아웃 효과 포함)"""
@@ -1936,13 +1955,39 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             temp_dir.mkdir(parents=True, exist_ok=True)
 
             audio_path = temp_dir / "extracted_audio.wav"
+            normalized_video = temp_dir / "normalized_input.mp4"
 
-            # Step 1: 오디오 추출
+            # Step 0: 타임스탬프 정렬 (싱크 문제 방지)
+            log_output = self.log("⏱️ Step 0: 타임스탬프 정렬 중...", log_output)
+            progress(0.05, desc="타임스탬프 정렬 중...")
+            yield log_output, None, None, "", "", gr.update(interactive=False)
+
+            # 코딩왕자 추천: 모든 작업 전에 타임스탬프를 0으로 정렬
+            normalize_cmd = [
+                "ffmpeg", "-y",
+                "-i", str(input_path),
+                "-map", "0",
+                "-c", "copy",
+                "-avoid_negative_ts", "make_zero",
+                str(normalized_video)
+            ]
+            normalize_result = subprocess.run(normalize_cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
+
+            if normalize_result.returncode == 0 and normalized_video.exists():
+                log_output = self.log("  ✓ 타임스탬프 정렬 완료 (0 기준)", log_output)
+                working_video = normalized_video
+            else:
+                log_output = self.log("  ⚠️ 정렬 스킵 (원본 사용)", log_output)
+                working_video = input_path
+
+            yield log_output, None, None, "", "", gr.update(interactive=False)
+
+            # Step 1: 오디오 추출 (정렬된 영상 기준)
             log_output = self.log("🎵 Step 1: 오디오 추출 중...", log_output)
             progress(0.1, desc="오디오 추출 중...")
             yield log_output, None, None, "", "", gr.update(interactive=False)
 
-            if not self.extract_audio_from_video(input_path, audio_path):
+            if not self.extract_audio_from_video(working_video, audio_path):
                 log_output = self.log("❌ 오디오 추출 실패", log_output)
                 yield log_output, None, None, "", "", gr.update(interactive=False)
                 return
@@ -2030,7 +2075,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             log_output = self.log("수정 완료 후 'Step 2' 버튼을 눌러주세요.", log_output)
             log_output = self.log("=" * 50, log_output)
 
-            yield log_output, str(input_path), str(segments_file), original_textbox, corrected_textbox, gr.update(interactive=True)
+            # 정렬된 영상 경로 반환 (싱크 일치 보장)
+            yield log_output, str(working_video), str(segments_file), original_textbox, corrected_textbox, gr.update(interactive=True)
 
         except Exception as e:
             error_str = str(e)
