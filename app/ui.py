@@ -1936,13 +1936,39 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             temp_dir.mkdir(parents=True, exist_ok=True)
 
             audio_path = temp_dir / "extracted_audio.wav"
+            normalized_video = temp_dir / "normalized_input.mp4"
 
-            # Step 1: 오디오 추출
+            # Step 0: 타임스탬프 정렬 (싱크 문제 방지)
+            log_output = self.log("⏱️ Step 0: 타임스탬프 정렬 중...", log_output)
+            progress(0.05, desc="타임스탬프 정렬 중...")
+            yield log_output, None, None, "", "", gr.update(interactive=False)
+
+            # 코딩왕자 추천: 모든 작업 전에 타임스탬프를 0으로 정렬
+            normalize_cmd = [
+                "ffmpeg", "-y",
+                "-i", str(input_path),
+                "-map", "0",
+                "-c", "copy",
+                "-avoid_negative_ts", "make_zero",
+                str(normalized_video)
+            ]
+            normalize_result = subprocess.run(normalize_cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
+
+            if normalize_result.returncode == 0 and normalized_video.exists():
+                log_output = self.log("  ✓ 타임스탬프 정렬 완료 (0 기준)", log_output)
+                working_video = normalized_video
+            else:
+                log_output = self.log("  ⚠️ 정렬 스킵 (원본 사용)", log_output)
+                working_video = input_path
+
+            yield log_output, None, None, "", "", gr.update(interactive=False)
+
+            # Step 1: 오디오 추출 (정렬된 영상 기준)
             log_output = self.log("🎵 Step 1: 오디오 추출 중...", log_output)
             progress(0.1, desc="오디오 추출 중...")
             yield log_output, None, None, "", "", gr.update(interactive=False)
 
-            if not self.extract_audio_from_video(input_path, audio_path):
+            if not self.extract_audio_from_video(working_video, audio_path):
                 log_output = self.log("❌ 오디오 추출 실패", log_output)
                 yield log_output, None, None, "", "", gr.update(interactive=False)
                 return
@@ -2030,7 +2056,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             log_output = self.log("수정 완료 후 'Step 2' 버튼을 눌러주세요.", log_output)
             log_output = self.log("=" * 50, log_output)
 
-            yield log_output, str(input_path), str(segments_file), original_textbox, corrected_textbox, gr.update(interactive=True)
+            # 정렬된 영상 경로 반환 (싱크 일치 보장)
+            yield log_output, str(working_video), str(segments_file), original_textbox, corrected_textbox, gr.update(interactive=True)
 
         except Exception as e:
             error_str = str(e)
