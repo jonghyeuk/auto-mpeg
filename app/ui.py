@@ -1684,6 +1684,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
         cmd = [
             "ffmpeg",
+            "-fflags", "+genpts",  # PTS 재생성 강제
             "-i", str(video_path),
             "-vf", f"ass='{ass_path_escaped}'",
         ] + encoder_args + [
@@ -1706,7 +1707,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             renderer = FFmpegRenderer()
             encoder_args = renderer.get_video_encoder_args()
 
-            # 원본 영상 정보 가져오기
+            # 원본 영상 비디오 정보 가져오기
             probe_cmd = [
                 "ffprobe", "-v", "error",
                 "-select_streams", "v:0",
@@ -1714,7 +1715,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 "-of", "csv=p=0",
                 str(video_path)
             ]
-            probe_result = subprocess.run(probe_cmd, capture_output=True, text=True)
+            probe_result = subprocess.run(probe_cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
             if probe_result.returncode != 0:
                 return False, "영상 정보 확인 실패"
 
@@ -1722,17 +1723,46 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             width, height = int(parts[0]), int(parts[1])
             fps = eval(parts[2]) if "/" in parts[2] else float(parts[2])
 
+            # 원본 영상 오디오 정보 가져오기 (샘플레이트, 채널)
+            audio_probe_cmd = [
+                "ffprobe", "-v", "error",
+                "-select_streams", "a:0",
+                "-show_entries", "stream=sample_rate,channels,codec_name",
+                "-of", "csv=p=0",
+                str(video_path)
+            ]
+            audio_probe = subprocess.run(audio_probe_cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
+
+            # 기본값 설정 (원본 오디오 정보 감지 실패 시)
+            sample_rate = 48000
+            channels = 2
+            audio_codec = "aac"
+            channel_layout = "stereo"
+
+            if audio_probe.returncode == 0 and audio_probe.stdout.strip():
+                audio_parts = audio_probe.stdout.strip().split(",")
+                if len(audio_parts) >= 2:
+                    try:
+                        sample_rate = int(audio_parts[0])
+                        channels = int(audio_parts[1])
+                        channel_layout = "stereo" if channels >= 2 else "mono"
+                        if len(audio_parts) >= 3:
+                            audio_codec = audio_parts[2]
+                        print(f"  🔊 원본 오디오: {sample_rate}Hz, {channels}ch, {audio_codec}")
+                    except:
+                        pass
+
             temp_dir = Path(video_path).parent
             videos_to_concat = []
 
-            # 오프닝 이미지 -> 영상 변환 (페이드 아웃 + 무음 오디오)
+            # 오프닝 이미지 -> 영상 변환 (페이드 아웃 + 무음 오디오 - 원본과 동일한 속성)
             if opening_image:
                 opening_video = temp_dir / "opening_temp.mp4"
                 cmd = [
                     "ffmpeg", "-y",
                     "-loop", "1",
                     "-i", str(opening_image),
-                    "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",  # 무음 오디오
+                    "-f", "lavfi", "-i", f"anullsrc=channel_layout={channel_layout}:sample_rate={sample_rate}",
                     "-t", str(duration),
                     "-vf", f"scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,fade=t=out:st={duration-fade_duration}:d={fade_duration}",
                 ] + encoder_args + [
@@ -1780,14 +1810,14 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
             videos_to_concat.append(str(main_video))
 
-            # 클로징 이미지 -> 영상 변환 (페이드 인 + 무음 오디오)
+            # 클로징 이미지 -> 영상 변환 (페이드 인 + 무음 오디오 - 원본과 동일한 속성)
             if closing_image:
                 closing_video = temp_dir / "closing_temp.mp4"
                 cmd = [
                     "ffmpeg", "-y",
                     "-loop", "1",
                     "-i", str(closing_image),
-                    "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",  # 무음 오디오
+                    "-f", "lavfi", "-i", f"anullsrc=channel_layout={channel_layout}:sample_rate={sample_rate}",
                     "-t", str(duration),
                     "-vf", f"scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,fade=t=in:st=0:d={fade_duration}",
                 ] + encoder_args + [

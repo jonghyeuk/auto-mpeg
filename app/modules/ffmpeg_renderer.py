@@ -1017,6 +1017,7 @@ class FFmpegRenderer:
             cmd = [
                 "ffmpeg",
                 "-y",
+                "-fflags", "+genpts",  # PTS 재생성 강제
                 "-i", str(input_video),
                 "-vf", filter_complex,  # 비디오 필터만 적용
             ] + encoder_args + [
