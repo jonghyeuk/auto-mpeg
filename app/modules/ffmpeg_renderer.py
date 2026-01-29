@@ -44,6 +44,16 @@ class FFmpegRenderer:
             return self._nvenc_available
 
         try:
+            # 먼저 nvidia-smi로 GPU 존재 여부 확인
+            nvidia_check = subprocess.run(
+                ["nvidia-smi"],
+                capture_output=True,
+                timeout=5
+            )
+            if nvidia_check.returncode != 0:
+                self._nvenc_available = False
+                return False
+
             # ffmpeg에서 nvenc 인코더 확인
             result = subprocess.run(
                 ["ffmpeg", "-hide_banner", "-encoders"],
