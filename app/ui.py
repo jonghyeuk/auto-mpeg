@@ -1687,8 +1687,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             "-i", str(video_path),
             "-vf", f"ass='{ass_path_escaped}'",
         ] + encoder_args + [
-            "-c:a", "aac",
-            "-b:a", "192k",
+            "-c:a", "copy",  # 오디오 원본 유지
             "-movflags", "+faststart",
             "-y",
             str(output_path)
