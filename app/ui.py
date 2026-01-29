@@ -1688,6 +1688,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             "-vf", f"ass='{ass_path_escaped}'",
         ] + encoder_args + [
             "-c:a", "copy",  # 오디오 원본 유지
+            "-start_at_zero",  # 타임스탬프 0부터 재설정 (자막 싱크)
             "-movflags", "+faststart",
             "-y",
             str(output_path)

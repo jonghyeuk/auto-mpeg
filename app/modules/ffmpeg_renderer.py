@@ -1023,7 +1023,7 @@ class FFmpegRenderer:
                 "-c:a", "copy",  # 오디오 원본 유지 (재인코딩 안 함)
                 "-map", "0:v:0",  # 첫 번째 비디오 스트림
                 "-map", "0:a:0?",  # 첫 번째 오디오 스트림 (없으면 무시)
-                "-async", "1",  # 오디오/비디오 싱크 맞춤
+                "-start_at_zero",  # 타임스탬프를 0부터 시작하도록 재설정
                 "-movflags", "+faststart",
                 str(output_video)
             ]
