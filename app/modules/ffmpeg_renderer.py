@@ -938,15 +938,20 @@ class FFmpegRenderer:
             target_w = target_width or self.width
             target_h = target_height or self.height
 
-            # 크롭 파라미터가 없으면 자동 감지
+            # 크롭 파라미터가 없으면 하드코딩 값 사용 (같은 레이아웃 영상용)
             if crop_params is None:
-                print(f"크롭 영역 자동 감지 중...")
-                crop_params = self.detect_crop_params(input_video)
-
-            if crop_params is None:
-                print(f"  ⚠️ 크롭 파라미터를 얻을 수 없어 원본 복사")
-                shutil.copy(str(input_video), str(output_video))
-                return True
+                # 하드코딩 크롭 값 (자동 감지 대신 고정값 사용)
+                # 원본 1920x1080 기준:
+                # - 위쪽: 녹색바 14px 제거
+                # - 아래쪽: 10px만 제거 (기존 30px → 10px로 여유 증가)
+                # - 좌우: 검은바 각 152px 제거
+                crop_params = {
+                    "w": 1616,   # 너비 (1920 - 152*2 = 1616)
+                    "h": 1056,   # 높이 (1080 - 14 - 10 = 1056)
+                    "x": 152,    # x 시작점
+                    "y": 14      # y 시작점
+                }
+                print(f"  📐 하드코딩 크롭: {crop_params['w']}x{crop_params['h']} at ({crop_params['x']}, {crop_params['y']})")
 
             # 위아래만 크롭하는 경우: 원본 너비 사용
             if vertical_only:
