@@ -1637,7 +1637,7 @@ class GradioUI:
         return new_segments
 
     def generate_ass_subtitles(self, segments, output_path, video_width=1920, video_height=1080):
-        """ASS 자막 파일 생성 (페이드 인/아웃 효과 포함)"""
+        """ASS 자막 파일 생성 (스마트 페이드 - 깜빡임 방지)"""
 
         # ASS 헤더
         ass_header = f"""[Script Info]
@@ -1663,16 +1663,48 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             cs = int((seconds % 1) * 100)
             return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
 
-        events = []
-        fade_duration = 200  # 페이드 효과 시간 (밀리초)
+        # 1. 타임스탬프 겹침 방지 (Sanitize)
+        sanitized = []
+        for i, seg in enumerate(segments):
+            seg_copy = seg.copy()
+            start = seg_copy.get("start", 0)
+            end = seg_copy.get("end", start + 3)
 
-        for seg in segments:
+            # 이전 세그먼트와 겹치면 조정
+            if i > 0 and sanitized:
+                prev_end = sanitized[-1].get("end", 0)
+                if start < prev_end:
+                    start = prev_end  # 앞자막 끝에 맞춤
+
+            seg_copy["start"] = start
+            seg_copy["end"] = end
+            sanitized.append(seg_copy)
+
+        # 2. 스마트 페이드 적용 + ASS 이벤트 생성
+        events = []
+        fade_ms = 200  # 페이드 시간 (밀리초)
+
+        for i, seg in enumerate(sanitized):
             start = seg.get("start", 0)
             end = seg.get("end", start + 3)
             text = seg.get("formatted_text", seg.get("corrected_text", seg.get("text", "")))
 
-            # 페이드 인/아웃 효과 추가
-            fade_effect = f"{{\\fad({fade_duration},{fade_duration})}}"
+            is_first = (i == 0)
+            is_last = (i == len(sanitized) - 1)
+
+            # 스마트 페이드: 연속 자막 깜빡임 방지 (코딩왕자 추천)
+            if is_first and is_last:
+                # 자막이 1개뿐
+                fade_effect = f"{{\\fad({fade_ms},{fade_ms})}}"
+            elif is_first:
+                # 첫 번째: 페이드 인만
+                fade_effect = f"{{\\fad({fade_ms},0)}}"
+            elif is_last:
+                # 마지막: 페이드 아웃만
+                fade_effect = f"{{\\fad(0,{fade_ms})}}"
+            else:
+                # 중간: 페이드 없음 (깜빡임 원천 차단)
+                fade_effect = ""
 
             start_time = format_time(start)
             end_time = format_time(end)
