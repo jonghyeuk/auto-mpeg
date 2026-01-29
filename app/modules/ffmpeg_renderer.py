@@ -877,8 +877,8 @@ class FFmpegRenderer:
                 # 마지막 감지값 사용 (가장 안정적)
                 w, h, x, y = map(int, matches[-1])
 
-                # 아래쪽 여유 추가 (30픽셀) - 너무 과하게 자르는 것 방지
-                bottom_margin = 30
+                # 아래쪽 여유 추가 (60픽셀) - 너무 과하게 자르는 것 방지
+                bottom_margin = 60
                 h = h + bottom_margin
                 print(f"  🔍 크롭 영역 감지: {w}x{h} at ({x}, {y}) (아래 {bottom_margin}px 여유 추가)")
                 return {"w": w, "h": h, "x": x, "y": y}
@@ -901,7 +901,7 @@ class FFmpegRenderer:
                 "-of", "csv=p=0",
                 str(video_path)
             ]
-            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace', check=True)
             width, height = map(int, result.stdout.strip().split(','))
             return width, height
         except Exception as e:
@@ -1023,7 +1023,7 @@ class FFmpegRenderer:
                 "-c:a", "copy",  # 오디오 원본 유지 (재인코딩 안 함)
                 "-map", "0:v:0",  # 첫 번째 비디오 스트림
                 "-map", "0:a:0?",  # 첫 번째 오디오 스트림 (없으면 무시)
-                "-start_at_zero",  # 타임스탬프를 0부터 시작하도록 재설정
+                "-avoid_negative_ts", "make_zero",  # 타임스탬프 0부터 시작 강제
                 "-movflags", "+faststart",
                 str(output_video)
             ]
@@ -1032,6 +1032,8 @@ class FFmpegRenderer:
                 cmd,
                 capture_output=True,
                 text=True,
+                encoding='utf-8',
+                errors='replace',
                 check=True
             )
 

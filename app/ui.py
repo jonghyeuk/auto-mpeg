@@ -1688,12 +1688,12 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             "-vf", f"ass='{ass_path_escaped}'",
         ] + encoder_args + [
             "-c:a", "copy",  # 오디오 원본 유지
-            "-start_at_zero",  # 타임스탬프 0부터 재설정 (자막 싱크)
+            "-avoid_negative_ts", "make_zero",  # 타임스탬프 0부터 시작 강제
             "-movflags", "+faststart",
             "-y",
             str(output_path)
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
         return result.returncode == 0, result.stderr
 
     def add_opening_closing(self, video_path, output_path, opening_image=None, closing_image=None, duration=3, fade_duration=1):
@@ -1741,7 +1741,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                     "-r", str(fps),
                     str(opening_video)
                 ]
-                result = subprocess.run(cmd, capture_output=True, text=True)
+                result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
                 if result.returncode == 0:
                     videos_to_concat.append(str(opening_video))
 
@@ -1755,7 +1755,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                     "-of", "csv=p=0",
                     str(video_path)
                 ]
-                dur_result = subprocess.run(duration_cmd, capture_output=True, text=True)
+                dur_result = subprocess.run(duration_cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
                 main_duration = float(dur_result.stdout.strip())
 
                 fade_filters = []
@@ -1771,11 +1771,10 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                         "-i", str(video_path),
                         "-vf", ",".join(fade_filters),
                     ] + encoder_args + [
-                        "-c:a", "aac",
-                        "-b:a", "192k",
+                        "-c:a", "copy",  # 오디오 원본 유지
                         str(main_faded)
                     ]
-                    result = subprocess.run(cmd, capture_output=True, text=True)
+                    result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
                     if result.returncode == 0:
                         main_video = main_faded
 
@@ -1797,7 +1796,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                     "-r", str(fps),
                     str(closing_video)
                 ]
-                result = subprocess.run(cmd, capture_output=True, text=True)
+                result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
                 if result.returncode == 0:
                     videos_to_concat.append(str(closing_video))
 
@@ -1820,12 +1819,11 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 "-safe", "0",
                 "-i", str(concat_file),
             ] + encoder_args + [
-                "-c:a", "aac",
-                "-b:a", "192k",
+                "-c:a", "copy",  # 오디오 원본 유지
                 "-movflags", "+faststart",
                 str(output_path)
             ]
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
 
             if result.returncode == 0:
                 return True, "성공"
@@ -1845,7 +1843,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             "-of", "csv=p=0",
             str(input_path)
         ]
-        probe_result = subprocess.run(probe_cmd, capture_output=True, text=True)
+        probe_result = subprocess.run(probe_cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
 
         if probe_result.returncode != 0:
             return False, "해상도 확인 실패"
@@ -1881,7 +1879,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             "-y",
             str(output_path)
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
 
         if result.returncode == 0:
             return True, f"{height}p → {target_height}p 업스케일 완료"
