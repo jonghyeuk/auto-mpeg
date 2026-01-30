@@ -196,6 +196,71 @@ class SubtitleCLI:
             formatted.append(seg_copy)
         return formatted
 
+    def correct_with_gpt(self, segments, glossary=None):
+        """GPT를 사용하여 자막 교정 (문맥 기반)"""
+        from openai import OpenAI
+        import time
+
+        client = OpenAI(api_key=config.OPENAI_API_KEY)
+
+        # 전체 텍스트 추출
+        full_text = "\n".join([f"[{i}] {seg.get('text', '')}" for i, seg in enumerate(segments)])
+
+        # 용어집 프롬프트
+        glossary_text = f"\n\n전문용어 참고: {glossary}" if glossary else ""
+
+        prompt = f"""다음은 STT로 추출한 자막입니다. 오인식된 단어의 맞춤법만 교정하세요.
+
+절대 규칙:
+1. 음절 수 100% 동일하게 유지 (자막 싱크 때문)
+2. 문장 구조/의미 변경 금지
+3. 단어 추가/삭제/축약 금지
+4. 오직 동음이의어/오타 수정만
+
+예시:
+- "광총매" → "광촉매" ✓ (3음절→3음절)
+- "난노입자" → "나노입자" ✓ (4음절→4음절)
+- "그래서요" → "그래서" ✗ (음절 변경 - 원본 유지)
+- "이건" → "이것은" ✗ (음절 변경 - 원본 유지){glossary_text}
+
+[번호] 형식 유지. 확실하지 않으면 원본 그대로.
+
+자막:
+{full_text}
+
+교정 (음절수 동일):"""
+
+        try:
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.3
+            )
+            corrected_text = response.choices[0].message.content.strip()
+
+            # 파싱: [번호] 텍스트 형식
+            corrected_segments = []
+            for seg in segments:
+                corrected_segments.append(seg.copy())
+
+            import re
+            for line in corrected_text.split("\n"):
+                match = re.match(r'\[(\d+)\]\s*(.+)', line.strip())
+                if match:
+                    idx = int(match.group(1))
+                    text = match.group(2).strip()
+                    if 0 <= idx < len(corrected_segments):
+                        corrected_segments[idx]["corrected_text"] = text
+
+            return corrected_segments
+
+        except Exception as e:
+            self.log(f"  ⚠️ GPT 교정 실패: {e}")
+            # 실패 시 원본 반환
+            for seg in segments:
+                seg["corrected_text"] = seg.get("text", "")
+            return segments
+
     def generate_ass_subtitles(self, segments, output_path):
         """ASS 자막 파일 생성"""
         ass_header = """[Script Info]
@@ -472,7 +537,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
         return result.returncode == 0
 
-    def run(self, input_video, output_path=None, upscale=None, opening=None, closing=None, skip_default_openclose=False):
+    def run(self, input_video, output_path=None, upscale=None, opening=None, closing=None, skip_default_openclose=False, glossary=None):
         """전체 파이프라인 실행"""
         input_path = Path(input_video)
         if not input_path.exists():
@@ -524,8 +589,11 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                         "end": seg.end,
                         "text": seg.text
                     })
-        for seg in segments:
-            seg["corrected_text"] = seg.get("text", "")
+        # Step 2.5: GPT 자막 교정
+        self.log("\n🔧 Step 2.5: GPT 자막 교정...")
+        segments = self.correct_with_gpt(segments, glossary=glossary)
+        corrected_count = sum(1 for seg in segments if seg.get("corrected_text", "") != seg.get("text", ""))
+        self.log(f"  ✓ {corrected_count}개 자막 교정됨")
 
         # Step 3: 자막 포맷팅
         self.log("\n📝 Step 3: 자막 포맷팅...")
@@ -610,6 +678,9 @@ def main():
 
 기본 오프닝/클로징:
   assets/opening.png, assets/closing.png 파일이 있으면 자동 사용
+
+GPT 자막 교정:
+  --glossary "광촉매,나노입자,이산화티타늄" 형식으로 전문용어 제공
         """
     )
 
@@ -619,6 +690,7 @@ def main():
     parser.add_argument("--opening", help="오프닝 이미지 (기본: assets/opening.png)")
     parser.add_argument("--closing", help="클로징 이미지 (기본: assets/closing.png)")
     parser.add_argument("--no-openclose", action="store_true", help="오프닝/클로징 비활성화")
+    parser.add_argument("--glossary", help="전문용어 목록 (쉼표 구분, GPT 교정 시 참고)")
 
     args = parser.parse_args()
 
@@ -633,7 +705,8 @@ def main():
         args.upscale,
         opening,
         closing,
-        skip_default_openclose=args.no_openclose
+        skip_default_openclose=args.no_openclose,
+        glossary=args.glossary
     )
 
     sys.exit(0 if success else 1)
