@@ -30,6 +30,10 @@ from app.modules.ffmpeg_renderer import FFmpegRenderer
 class SubtitleCLI:
     """자막 모드 CLI"""
 
+    # 기본 오프닝/클로징 이미지 경로 (저장소 루트 기준)
+    DEFAULT_OPENING = project_root / "assets" / "opening.png"
+    DEFAULT_CLOSING = project_root / "assets" / "closing.png"
+
     def __init__(self):
         self.temp_dir = config.TEMP_DIR / "subtitle_cli"
         self.temp_dir.mkdir(parents=True, exist_ok=True)
@@ -315,7 +319,160 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
         return result.returncode == 0
 
-    def run(self, input_video, output_path=None, upscale=None, opening=None, closing=None):
+    def add_opening_closing(self, video_path, output_path, opening_image=None, closing_image=None, duration=3, fade_duration=1):
+        """오프닝/클로징 이미지를 영상 앞뒤에 추가 (페이드 효과)"""
+        if not opening_image and not closing_image:
+            shutil.copy(str(video_path), str(output_path))
+            return True
+
+        renderer = FFmpegRenderer()
+        encoder_args = renderer.get_video_encoder_args()
+
+        # 원본 영상 비디오 정보
+        probe_cmd = [
+            "ffprobe", "-v", "error",
+            "-select_streams", "v:0",
+            "-show_entries", "stream=width,height,r_frame_rate",
+            "-of", "csv=p=0",
+            str(video_path)
+        ]
+        probe_result = subprocess.run(probe_cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
+        if probe_result.returncode != 0:
+            self.log("  ⚠️ 영상 정보 확인 실패, 원본 사용")
+            shutil.copy(str(video_path), str(output_path))
+            return True
+
+        parts = probe_result.stdout.strip().split(",")
+        width, height = int(parts[0]), int(parts[1])
+        fps = eval(parts[2]) if "/" in parts[2] else float(parts[2])
+
+        # 원본 영상 오디오 정보
+        audio_probe_cmd = [
+            "ffprobe", "-v", "error",
+            "-select_streams", "a:0",
+            "-show_entries", "stream=sample_rate,channels",
+            "-of", "csv=p=0",
+            str(video_path)
+        ]
+        audio_probe = subprocess.run(audio_probe_cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
+
+        sample_rate = 48000
+        channels = 2
+        channel_layout = "stereo"
+
+        if audio_probe.returncode == 0 and audio_probe.stdout.strip():
+            audio_parts = audio_probe.stdout.strip().split(",")
+            if len(audio_parts) >= 2:
+                try:
+                    sample_rate = int(audio_parts[0])
+                    channels = int(audio_parts[1])
+                    channel_layout = "stereo" if channels >= 2 else "mono"
+                    self.log(f"  🔊 원본 오디오: {sample_rate}Hz, {channels}ch")
+                except:
+                    pass
+
+        videos_to_concat = []
+
+        # 오프닝 이미지 -> 영상 변환
+        if opening_image and Path(opening_image).exists():
+            opening_video = self.temp_dir / "opening_temp.mp4"
+            cmd = [
+                "ffmpeg", "-y",
+                "-loop", "1",
+                "-i", str(opening_image),
+                "-f", "lavfi", "-i", f"anullsrc=channel_layout={channel_layout}:sample_rate={sample_rate}",
+                "-t", str(duration),
+                "-vf", f"scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,fade=t=out:st={duration-fade_duration}:d={fade_duration}",
+            ] + encoder_args + [
+                "-c:a", "aac", "-b:a", "192k",
+                "-shortest",
+                "-r", str(fps),
+                str(opening_video)
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
+            if result.returncode == 0:
+                videos_to_concat.append(str(opening_video))
+                self.log(f"  ✓ 오프닝 생성 ({duration}초)")
+
+        # 메인 영상 (페이드 인/아웃 적용)
+        main_video = video_path
+        if opening_image or closing_image:
+            duration_cmd = [
+                "ffprobe", "-v", "error",
+                "-show_entries", "format=duration",
+                "-of", "csv=p=0",
+                str(video_path)
+            ]
+            dur_result = subprocess.run(duration_cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
+            main_duration = float(dur_result.stdout.strip())
+
+            fade_filters = []
+            if opening_image and Path(opening_image).exists():
+                fade_filters.append(f"fade=t=in:st=0:d={fade_duration}")
+            if closing_image and Path(closing_image).exists():
+                fade_filters.append(f"fade=t=out:st={main_duration-fade_duration}:d={fade_duration}")
+
+            if fade_filters:
+                main_faded = self.temp_dir / "main_faded.mp4"
+                cmd = [
+                    "ffmpeg", "-y",
+                    "-i", str(video_path),
+                    "-vf", ",".join(fade_filters),
+                ] + encoder_args + [
+                    "-c:a", "copy",
+                    str(main_faded)
+                ]
+                result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
+                if result.returncode == 0:
+                    main_video = main_faded
+
+        videos_to_concat.append(str(main_video))
+
+        # 클로징 이미지 -> 영상 변환
+        if closing_image and Path(closing_image).exists():
+            closing_video = self.temp_dir / "closing_temp.mp4"
+            cmd = [
+                "ffmpeg", "-y",
+                "-loop", "1",
+                "-i", str(closing_image),
+                "-f", "lavfi", "-i", f"anullsrc=channel_layout={channel_layout}:sample_rate={sample_rate}",
+                "-t", str(duration),
+                "-vf", f"scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,fade=t=in:st=0:d={fade_duration}",
+            ] + encoder_args + [
+                "-c:a", "aac", "-b:a", "192k",
+                "-shortest",
+                "-r", str(fps),
+                str(closing_video)
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
+            if result.returncode == 0:
+                videos_to_concat.append(str(closing_video))
+                self.log(f"  ✓ 클로징 생성 ({duration}초)")
+
+        # concat
+        if len(videos_to_concat) == 1:
+            shutil.copy(str(main_video), str(output_path))
+            return True
+
+        concat_file = self.temp_dir / "concat_list.txt"
+        with open(concat_file, "w", encoding="utf-8") as f:
+            for v in videos_to_concat:
+                f.write(f"file '{v}'\n")
+
+        cmd = [
+            "ffmpeg", "-y",
+            "-f", "concat",
+            "-safe", "0",
+            "-i", str(concat_file),
+        ] + encoder_args + [
+            "-c:a", "copy",
+            "-movflags", "+faststart",
+            str(output_path)
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
+        return result.returncode == 0
+
+    def run(self, input_video, output_path=None, upscale=None, opening=None, closing=None, skip_default_openclose=False):
         """전체 파이프라인 실행"""
         input_path = Path(input_video)
         if not input_path.exists():
@@ -404,6 +561,31 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 final_video = upscaled_path
             self.log("  ✓ 완료")
 
+        # Step 7: 오프닝/클로징 (기본 이미지 자동 사용)
+        opening_img = opening
+        closing_img = closing
+
+        # 인자로 안 줬으면 기본 이미지 확인 (skip_default_openclose가 아닌 경우만)
+        if not skip_default_openclose:
+            if not opening_img and self.DEFAULT_OPENING.exists():
+                opening_img = str(self.DEFAULT_OPENING)
+            if not closing_img and self.DEFAULT_CLOSING.exists():
+                closing_img = str(self.DEFAULT_CLOSING)
+
+        if opening_img or closing_img:
+            self.log("\n🎬 Step 7: 오프닝/클로징 추가...")
+            if opening_img:
+                self.log(f"  📸 오프닝: {Path(opening_img).name}")
+            if closing_img:
+                self.log(f"  📸 클로징: {Path(closing_img).name}")
+
+            with_openclose = self.temp_dir / "with_openclose.mp4"
+            if self.add_opening_closing(final_video, with_openclose, opening_img, closing_img):
+                final_video = with_openclose
+                self.log("  ✓ 완료")
+            else:
+                self.log("  ⚠️ 오프닝/클로징 추가 실패, 원본 사용")
+
         # 최종 복사
         shutil.copy(final_video, output_path)
 
@@ -424,24 +606,34 @@ def main():
   python subtitle_cli.py video.mp4
   python subtitle_cli.py video.mp4 --output result.mp4
   python subtitle_cli.py video.mp4 --upscale 1080
+  python subtitle_cli.py video.mp4 --opening intro.png --closing outro.png
+
+기본 오프닝/클로징:
+  assets/opening.png, assets/closing.png 파일이 있으면 자동 사용
         """
     )
 
     parser.add_argument("input", help="입력 MP4 파일")
     parser.add_argument("-o", "--output", help="출력 파일 경로")
     parser.add_argument("--upscale", type=int, help="업스케일 해상도 (예: 1080)")
-    parser.add_argument("--opening", help="오프닝 이미지 (미구현)")
-    parser.add_argument("--closing", help="클로징 이미지 (미구현)")
+    parser.add_argument("--opening", help="오프닝 이미지 (기본: assets/opening.png)")
+    parser.add_argument("--closing", help="클로징 이미지 (기본: assets/closing.png)")
+    parser.add_argument("--no-openclose", action="store_true", help="오프닝/클로징 비활성화")
 
     args = parser.parse_args()
+
+    # --no-openclose면 오프닝/클로징 비활성화
+    opening = None if args.no_openclose else args.opening
+    closing = None if args.no_openclose else args.closing
 
     cli = SubtitleCLI()
     success = cli.run(
         args.input,
         args.output,
         args.upscale,
-        args.opening,
-        args.closing
+        opening,
+        closing,
+        skip_default_openclose=args.no_openclose
     )
 
     sys.exit(0 if success else 1)
