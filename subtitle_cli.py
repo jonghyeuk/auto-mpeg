@@ -538,7 +538,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         self.log("\n✂️ Step 4: 크롭 및 스케일...")
         cropped_path = self.temp_dir / "cropped.mp4"
         renderer = FFmpegRenderer()
-        renderer.crop_and_scale_video(working_video, cropped_path)
+        renderer.crop_and_scale_video(working_video, cropped_path, vertical_only=False)
         video_for_subtitle = cropped_path if cropped_path.exists() else working_video
         self.log("  ✓ 완료")
 
