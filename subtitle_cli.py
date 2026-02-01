@@ -241,7 +241,9 @@ class SubtitleCLI:
             # 파싱: [번호] 텍스트 형식
             corrected_segments = []
             for seg in segments:
-                corrected_segments.append(seg.copy())
+                seg_copy = seg.copy()
+                seg_copy["corrected_text"] = seg_copy.get("text", "")  # 기본값 초기화
+                corrected_segments.append(seg_copy)
 
             import re
             for line in corrected_text.split("\n"):
