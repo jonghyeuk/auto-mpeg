@@ -1789,7 +1789,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
         return result.returncode == 0, result.stderr
 
-    def add_opening_closing(self, video_path, output_path, opening_image=None, closing_image=None, duration=3, fade_duration=1):
+    def add_opening_closing(self, video_path, output_path, opening_image=None, closing_image=None, opening_duration=3, closing_duration=3, fade_duration=1):
         """오프닝/클로징 이미지를 영상 앞뒤에 추가 (페이드 효과) - GPU 인코딩 지원"""
         import os
         import tempfile
@@ -1855,8 +1855,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                     "-loop", "1",
                     "-i", str(opening_image),
                     "-f", "lavfi", "-i", f"anullsrc=channel_layout={channel_layout}:sample_rate={sample_rate}",
-                    "-t", str(duration),
-                    "-vf", f"scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,fade=t=out:st={duration-fade_duration}:d={fade_duration}",
+                    "-t", str(opening_duration),
+                    "-vf", f"scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,fade=t=out:st={opening_duration-fade_duration}:d={fade_duration}",
                 ] + encoder_args + [
                     "-c:a", "aac", "-b:a", "192k",
                     "-shortest",
@@ -1910,7 +1910,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                     "-loop", "1",
                     "-i", str(closing_image),
                     "-f", "lavfi", "-i", f"anullsrc=channel_layout={channel_layout}:sample_rate={sample_rate}",
-                    "-t", str(duration),
+                    "-t", str(closing_duration),
                     "-vf", f"scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,fade=t=in:st=0:d={fade_duration}",
                 ] + encoder_args + [
                     "-c:a", "aac", "-b:a", "192k",
@@ -2231,7 +2231,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
     def process_subtitle_mode_step2(self, video_path_state, segments_file_state, upscale_target, previous_log="",
                                      subtitle_original="", subtitle_editor="", subtitle_corrected="", subtitle_choice="편집",
-                                     opening_image=None, closing_image=None, progress=gr.Progress()):
+                                     opening_image=None, closing_image=None, duration_preset="오프닝 3초 / 클로징 3초", progress=gr.Progress()):
         """
         자막 모드 Step 2: 자막 합성 → 오프닝/클로징 추가 → 미리보기 제공
         선택된 자막(원본/편집/교정)을 사용하여 처리
@@ -2353,12 +2353,24 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 yield log_output, None, gr.update(interactive=False)
 
                 final_video_path = temp_dir / "final_with_intro.mp4"
+
+                # duration_preset 파싱
+                duration_map = {
+                    "오프닝 3초 / 클로징 3초": (3, 3),
+                    "오프닝 5초 / 클로징 5초": (5, 5),
+                    "오프닝 3초 / 클로징 12초": (3, 12),
+                    "오프닝 5초 / 클로징 65초": (5, 65),
+                }
+                opening_dur, closing_dur = duration_map.get(duration_preset, (3, 3))
+                log_output = self.log(f"  📍 오프닝 {opening_dur}초 / 클로징 {closing_dur}초", log_output)
+
                 success, msg = self.add_opening_closing(
                     subtitled_path,
                     final_video_path,
                     opening_image,
                     closing_image,
-                    duration=3,
+                    opening_duration=opening_dur,
+                    closing_duration=closing_dur,
                     fade_duration=1
                 )
 
@@ -3471,6 +3483,18 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                                     type="filepath"
                                 )
 
+                            duration_preset = gr.Dropdown(
+                                choices=[
+                                    "오프닝 3초 / 클로징 3초",
+                                    "오프닝 5초 / 클로징 5초",
+                                    "오프닝 3초 / 클로징 12초",
+                                    "오프닝 5초 / 클로징 65초"
+                                ],
+                                value="오프닝 3초 / 클로징 3초",
+                                label="⏱️ 오프닝/클로징 시간",
+                                info="영상 길이 조절용"
+                            )
+
                             subtitle_mp4_input = gr.File(
                                 label="MP4 파일 업로드",
                                 file_types=[".mp4", ".avi", ".mov", ".mkv"],
@@ -3575,7 +3599,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                         fn=self.process_subtitle_mode_step2,
                         inputs=[video_path_state, segments_file_state, subtitle_upscale_target, subtitle_log,
                                 subtitle_original, subtitle_editor, subtitle_corrected, subtitle_choice,
-                                opening_image, closing_image],
+                                opening_image, closing_image, duration_preset],
                         outputs=[subtitle_log, subtitle_preview, subtitle_step3_btn]
                     )
 
