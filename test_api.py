@@ -28,7 +28,7 @@ test_models = [
     "claude-3-5-haiku-20241022",
 
     # Claude 3.7 시리즈 (추측)
-    "claude-sonnet-4-5-20241022",
+    "claude-sonnet-4-5-20250514",
     "claude-sonnet-3.7",
 
     # Claude 4 시리즈 (추측)

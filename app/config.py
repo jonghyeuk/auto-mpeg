@@ -29,7 +29,7 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 
 # LLM 설정
-DEFAULT_LLM_MODEL = "claude-sonnet-4-5-20241022"  # Claude Sonnet 4.5 (최고 가성비!)
+DEFAULT_LLM_MODEL = "claude-sonnet-4-5-20250514"  # Claude Sonnet 4.5 (최고 가성비!)
 LLM_TEMPERATURE = 0.7
 LLM_MAX_TOKENS = 4096
 
