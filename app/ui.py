@@ -1242,10 +1242,55 @@ class GradioUI:
     # PPT 설명 모드 함수들
     # ============================================================
 
+    def _generate_elevenlabs_tts(self, text, output_path, voice_id="QtY3JBOUKEB5xzrRfOKc"):
+        """
+        ElevenLabs API를 사용하여 텍스트를 음성으로 변환
+
+        Args:
+            text: 변환할 텍스트
+            output_path: 출력 MP3 파일 경로
+            voice_id: ElevenLabs 음성 ID
+
+        Returns:
+            성공 여부 (bool)
+        """
+        import requests
+
+        api_key = config.ELEVENLABS_API_KEY
+        if not api_key:
+            raise ValueError("ELEVENLABS_API_KEY가 설정되지 않았습니다. .env 파일을 확인하세요.")
+
+        url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
+
+        headers = {
+            "Accept": "audio/mpeg",
+            "Content-Type": "application/json",
+            "xi-api-key": api_key
+        }
+
+        data = {
+            "text": text,
+            "model_id": "eleven_multilingual_v2",
+            "voice_settings": {
+                "stability": 0.5,
+                "similarity_boost": 0.75
+            }
+        }
+
+        response = requests.post(url, json=data, headers=headers)
+
+        if response.status_code == 200:
+            with open(output_path, "wb") as f:
+                f.write(response.content)
+            return True
+        else:
+            raise RuntimeError(f"ElevenLabs TTS 실패 (HTTP {response.status_code}): {response.text}")
+
     def process_pptx_explanation(
         self,
         pptx_file,
         additional_instructions,
+        enable_tts,
         progress=gr.Progress()
     ):
         """
@@ -1254,24 +1299,25 @@ class GradioUI:
         Args:
             pptx_file: 업로드된 PPTX/PDF 파일
             additional_instructions: 사용자가 입력한 부가 지시사항 (빈 문자열이면 디폴트)
+            enable_tts: ElevenLabs TTS 음성 생성 활성화 여부
         """
         log_output = ""
 
         try:
             if pptx_file is None:
                 log_output = self.log("❌ PPT/PDF 파일을 업로드해주세요.", log_output)
-                yield log_output, ""
+                yield log_output, "", None
                 return
 
             # 의존성 체크
             log_output = self.log("🔍 시스템 의존성 체크 중...", log_output)
-            yield log_output, ""
+            yield log_output, "", None
 
             progress(0.05, desc="PPT 파싱 중...")
             log_output = self.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", log_output)
             log_output = self.log("📂 STEP 1: PPT 파싱 및 이미지 변환", log_output)
             log_output = self.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", log_output)
-            yield log_output, ""
+            yield log_output, "", None
 
             pptx_path = Path(pptx_file.name if hasattr(pptx_file, 'name') else pptx_file)
 
@@ -1279,8 +1325,14 @@ class GradioUI:
             explain_img_dir = config.TEMP_DIR / "explain_slides_img"
             explain_img_dir.mkdir(parents=True, exist_ok=True)
 
+            # 음성 출력 디렉토리
+            explain_audio_dir = config.TEMP_DIR / "explain_audio"
+            explain_audio_dir.mkdir(parents=True, exist_ok=True)
+
             # 기존 파일 정리
             for f in explain_img_dir.glob("*.png"):
+                f.unlink()
+            for f in explain_audio_dir.glob("*.mp3"):
                 f.unlink()
 
             slides_json = config.META_DIR / "explain_slides.json"
@@ -1297,7 +1349,7 @@ class GradioUI:
                 convert_pptx_to_images(pptx_path, explain_img_dir)
 
             log_output = self.log(f"📊 총 {len(slides)}개 슬라이드 발견", log_output)
-            yield log_output, ""
+            yield log_output, "", None
 
             # STEP 2: Claude Vision으로 각 슬라이드 설명 생성
             progress(0.15, desc="AI 슬라이드 분석 중...")
@@ -1305,7 +1357,7 @@ class GradioUI:
             log_output = self.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", log_output)
             log_output = self.log("🤖 STEP 2: AI 슬라이드 설명 생성", log_output)
             log_output = self.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", log_output)
-            yield log_output, ""
+            yield log_output, "", None
 
             from anthropic import Anthropic
             import base64
@@ -1313,10 +1365,15 @@ class GradioUI:
             client = Anthropic(api_key=config.ANTHROPIC_API_KEY)
 
             all_explanations = []
+            audio_files = []  # TTS 생성된 오디오 파일 경로 목록
+
+            # TTS 비율 계산 (분석 70%, TTS 25%, 마무리 5%)
+            analysis_weight = 0.70 if enable_tts else 0.85
+            tts_weight = 0.20 if enable_tts else 0.0
 
             for i, slide in enumerate(slides):
                 slide_num = i + 1
-                progress_pct = 0.15 + (i / len(slides)) * 0.8
+                progress_pct = 0.15 + (i / len(slides)) * analysis_weight
                 progress(progress_pct, desc=f"슬라이드 {slide_num}/{len(slides)} 분석 중...")
 
                 log_output = self.log("", log_output)
@@ -1400,7 +1457,7 @@ class GradioUI:
                     "text": explanation_prompt
                 })
 
-                yield log_output, "\n\n".join(all_explanations)
+                yield log_output, "\n\n".join(all_explanations), None
 
                 try:
                     message = client.messages.create(
@@ -1423,23 +1480,90 @@ class GradioUI:
                     all_explanations.append(error_msg)
                     log_output = self.log(f"  ❌ 슬라이드 {slide_num} 분석 실패: {str(e)}", log_output)
 
-                yield log_output, "\n\n---\n\n".join(all_explanations)
+                yield log_output, "\n\n---\n\n".join(all_explanations), None
+
+            # STEP 3: ElevenLabs TTS 음성 생성 (활성화된 경우)
+            final_audio_path = None
+
+            if enable_tts:
+                log_output = self.log("", log_output)
+                log_output = self.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", log_output)
+                log_output = self.log("🔊 STEP 3: ElevenLabs TTS 음성 생성", log_output)
+                log_output = self.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", log_output)
+                yield log_output, "\n\n---\n\n".join(all_explanations), None
+
+                import re
+
+                for i, explanation_text in enumerate(all_explanations):
+                    slide_num = i + 1
+                    progress_pct = 0.15 + analysis_weight + (i / len(all_explanations)) * tts_weight
+                    progress(progress_pct, desc=f"TTS 생성 중... ({slide_num}/{len(all_explanations)})")
+
+                    # 마크다운 기호 제거하여 읽기용 텍스트 생성
+                    tts_text = re.sub(r'#{1,6}\s*', '', explanation_text)  # 헤더 제거
+                    tts_text = re.sub(r'\*\*\[([^\]]+)\]\*\*', r'\1:', tts_text)  # **[배경]** → 배경:
+                    tts_text = re.sub(r'\*\*([^*]+)\*\*', r'\1', tts_text)  # **bold** → bold
+                    tts_text = re.sub(r'---', '', tts_text)  # 구분선 제거
+                    tts_text = tts_text.strip()
+
+                    audio_path = explain_audio_dir / f"explain_{slide_num:03d}.mp3"
+
+                    try:
+                        self._generate_elevenlabs_tts(tts_text, audio_path)
+                        audio_files.append(str(audio_path))
+                        log_output = self.log(f"  🔊 슬라이드 {slide_num} TTS 생성 완료", log_output)
+                    except Exception as e:
+                        log_output = self.log(f"  ❌ 슬라이드 {slide_num} TTS 실패: {str(e)}", log_output)
+
+                    yield log_output, "\n\n---\n\n".join(all_explanations), None
+
+                # 모든 오디오 파일을 하나로 합치기
+                if audio_files:
+                    log_output = self.log("", log_output)
+                    log_output = self.log("🔗 오디오 파일 병합 중...", log_output)
+
+                    concat_list_path = explain_audio_dir / "concat_list.txt"
+                    with open(concat_list_path, "w") as f:
+                        for audio_file in audio_files:
+                            f.write(f"file '{audio_file}'\n")
+
+                    final_audio_path = config.OUTPUT_DIR / "ppt_explanation.mp3"
+                    cmd = [
+                        "ffmpeg", "-y",
+                        "-f", "concat",
+                        "-safe", "0",
+                        "-i", str(concat_list_path),
+                        "-c", "copy",
+                        str(final_audio_path)
+                    ]
+
+                    try:
+                        subprocess.run(cmd, capture_output=True, check=True)
+                        log_output = self.log(f"  ✅ 전체 음성 파일 생성: {final_audio_path.name}", log_output)
+                        final_audio_path = str(final_audio_path)
+                    except Exception as e:
+                        log_output = self.log(f"  ❌ 오디오 병합 실패: {str(e)}", log_output)
+                        # 병합 실패 시 첫 번째 파일이라도 제공
+                        if audio_files:
+                            final_audio_path = audio_files[0]
 
             # 완료
             progress(1.0, desc="분석 완료!")
             log_output = self.log("", log_output)
             log_output = self.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", log_output)
             log_output = self.log(f"🎉 전체 {len(slides)}개 슬라이드 분석 완료!", log_output)
+            if enable_tts and audio_files:
+                log_output = self.log(f"🔊 음성 파일 {len(audio_files)}개 생성 완료!", log_output)
             log_output = self.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", log_output)
 
             final_result = "\n\n---\n\n".join(all_explanations)
-            yield log_output, final_result
+            yield log_output, final_result, final_audio_path
 
         except Exception as e:
             log_output = self.log(f"❌ 오류 발생: {str(e)}", log_output)
             import traceback
             log_output = self.log(traceback.format_exc(), log_output)
-            yield log_output, ""
+            yield log_output, "", None
 
     # ============================================================
     # MP4 자막 모드 함수들
@@ -3849,6 +3973,12 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                                 info="AI에게 추가로 전달할 지시사항 (비워두면 기본 스타일로 설명)"
                             )
 
+                            explain_tts_enabled = gr.Checkbox(
+                                label="ElevenLabs TTS 음성 생성",
+                                value=False,
+                                info="설명 내용을 ElevenLabs TTS로 음성 변환 (.env에 ELEVENLABS_API_KEY 필요)"
+                            )
+
                             explain_btn = gr.Button("🔍 슬라이드 분석 시작", variant="primary", size="lg")
 
                         with gr.Column(scale=2):
@@ -3868,10 +3998,15 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                                 placeholder="PPT를 업로드하고 '슬라이드 분석 시작' 버튼을 클릭하면 여기에 결과가 표시됩니다..."
                             )
 
+                            explain_audio_output = gr.Audio(
+                                label="🔊 설명 음성 (ElevenLabs TTS)",
+                                visible=True
+                            )
+
                     explain_btn.click(
                         fn=self.process_pptx_explanation,
-                        inputs=[explain_pptx_input, explain_instructions],
-                        outputs=[explain_log, explain_result]
+                        inputs=[explain_pptx_input, explain_instructions, explain_tts_enabled],
+                        outputs=[explain_log, explain_result, explain_audio_output]
                     )
 
                 # ============================================================
