@@ -101,7 +101,9 @@ class FFmpegRenderer:
         keyword_overlays: Optional[List[Dict[str, Any]]] = None,
         enable_keyword_marking: bool = False,
         highlight: Optional[Dict[str, Any]] = None,
-        arrow_pointers: Optional[List[Dict[str, Any]]] = None
+        arrow_pointers: Optional[List[Dict[str, Any]]] = None,
+        fade_in_duration: float = 0.0,
+        fade_out_duration: float = 0.0
     ) -> bool:
         """
         단일 슬라이드 클립 생성 (이미지 + 오디오 + 키워드 마킹 오버레이 + 하이라이트 + 화살표)
@@ -115,6 +117,8 @@ class FFmpegRenderer:
             enable_keyword_marking: 키워드 마킹 사용 여부
             highlight: 핵심 문구 하이라이트 {"text": "강조문구", "timing": 5.0}
             arrow_pointers: 화살표 포인터 리스트 [{"target_x": 100, "target_y": 200, "timing": 3.0}, ...]
+            fade_in_duration: 페이드 인 길이 (초, 0이면 없음)
+            fade_out_duration: 페이드 아웃 길이 (초, 0이면 없음)
 
         Returns:
             성공 여부
@@ -291,15 +295,35 @@ class FFmpegRenderer:
 
                     filter_complex += f";[{prev_label}]{drawtext_filter}[out]"
 
-                # filter_complex 추가
-                cmd.extend(["-filter_complex", filter_complex])
-                cmd.extend(["-map", "[out]"])  # 비디오 출력 매핑
+                # 페이드 인/아웃 추가
+                fade_filters = ""
+                if fade_in_duration > 0:
+                    fade_filters += f",fade=t=in:st=0:d={fade_in_duration}"
+                if fade_out_duration > 0:
+                    fade_out_start = max(0, duration - fade_out_duration)
+                    fade_filters += f",fade=t=out:st={fade_out_start}:d={fade_out_duration}"
+
+                if fade_filters:
+                    # [out]에 페이드 추가 → [final]
+                    filter_complex += f";[out]{fade_filters.lstrip(',')}[final]"
+                    cmd.extend(["-filter_complex", filter_complex])
+                    cmd.extend(["-map", "[final]"])
+                else:
+                    cmd.extend(["-filter_complex", filter_complex])
+                    cmd.extend(["-map", "[out]"])
+
                 # 오디오 입력 인덱스 = 1 + 키워드오버레이 수 + 화살표 수
                 audio_input_idx = 1 + len(overlay_inputs) + len(arrow_inputs)
                 cmd.extend(["-map", f"{audio_input_idx}:a"])  # 오디오 출력 매핑
             else:
-                # 오버레이/하이라이트 없음: 포맷 변환만 수행
-                cmd.extend(["-vf", "format=yuv420p"])
+                # 오버레이/하이라이트 없음: 포맷 변환 + 페이드
+                vf_filters = "format=yuv420p"
+                if fade_in_duration > 0:
+                    vf_filters += f",fade=t=in:st=0:d={fade_in_duration}"
+                if fade_out_duration > 0:
+                    fade_out_start = max(0, duration - fade_out_duration)
+                    vf_filters += f",fade=t=out:st={fade_out_start}:d={fade_out_duration}"
+                cmd.extend(["-vf", vf_filters])
 
             # 공통 인코딩 옵션 (Windows Media Player 호환)
             cmd.extend([

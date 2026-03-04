@@ -1447,6 +1447,15 @@ class GradioUI:
 
 """
 
+                # 첫 슬라이드 vs 이후 슬라이드 구분
+                is_first_slide = (i == 0)
+                continuity_instruction = ""
+                if is_first_slide:
+                    continuity_instruction = """8. 첫 번째 슬라이드이므로, "오늘은~", "Today~" 같은 도입부로 시작해도 좋습니다."""
+                else:
+                    continuity_instruction = """8. 이것은 하나의 연속 강의 영상의 중간 부분입니다. "오늘은~", "Today~" 같은 도입부를 쓰지 마세요.
+   바로 내용을 설명하세요. 예: "다음으로 살펴볼 것은~", "이번에는~", "Now let's look at~" 등으로 자연스럽게 이어가세요."""
+
                 explanation_prompt = f"""당신은 강의 영상의 나레이터입니다.
 아래 슬라이드 내용을 보고, **강사가 학생들에게 발표하듯** 자연스러운 나레이션 대본을 작성하세요.
 
@@ -1459,8 +1468,9 @@ class GradioUI:
 5. 마크다운(**, ##, - 등)을 사용하지 마세요. 순수 텍스트만 출력하세요.
 6. TTS로 읽힐 대본이므로, 듣기 자연스러운 문장으로 작성하세요.
 7. 15~25초 분량 (한국어 기준 60~100자)으로 작성하세요.
+{continuity_instruction}
 
-【슬라이드 정보】
+【슬라이드 정보 ({slide_num}/{len(slides)})】
 제목: {slide.get('title', '(없음)')}
 본문: {slide.get('body', '(없음)')}
 {f"발표자 노트: {slide.get('notes', '')}" if slide.get('notes') else ''}
@@ -1618,13 +1628,6 @@ class GradioUI:
                     progress_pct = 0.15 + analysis_weight + tts_weight
                     progress(progress_pct, desc="MP4 영상 렌더링 중...")
 
-                    # audio_meta.json 생성
-                    audio_meta_json = config.META_DIR / "explain_audio_meta.json"
-                    import json
-                    with open(audio_meta_json, 'w', encoding='utf-8') as f:
-                        json.dump(audio_durations, f, ensure_ascii=False, indent=2)
-
-                    # FFmpegRenderer로 영상 렌더링
                     from app.modules.ffmpeg_renderer import FFmpegRenderer
 
                     renderer = FFmpegRenderer(
@@ -1635,31 +1638,60 @@ class GradioUI:
                         crf=23
                     )
 
-                    final_video = config.OUTPUT_DIR / "ppt_explanation.mp4"
-
+                    total_duration = sum(d['duration'] for d in audio_durations)
                     log_output = self.log(f"  - 슬라이드 {len(audio_durations)}개 → MP4 렌더링", log_output)
                     log_output = self.log(f"  - 해상도: {config.VIDEO_WIDTH}x{config.VIDEO_HEIGHT}", log_output)
-                    total_duration = sum(d['duration'] for d in audio_durations)
                     log_output = self.log(f"  - 예상 길이: {total_duration:.1f}초 ({total_duration/60:.1f}분)", log_output)
                     yield out(log_output, "\n\n---\n\n".join(all_explanations), scripts_formatted, final_audio_path)
 
-                    success = renderer.render_video(
-                        slides_json_path=slides_json,
-                        audio_meta_path=audio_meta_json,
-                        slides_img_dir=explain_img_dir,
-                        audio_dir=explain_audio_dir,
-                        clips_dir=explain_clips_dir,
-                        output_video_path=final_video,
-                        transition_effect="fade",
-                        transition_duration=0.5
-                    )
+                    # 각 슬라이드별 클립 직접 생성
+                    clip_paths = []
+                    for j, ad in enumerate(audio_durations):
+                        slide_idx = ad["index"]
+                        image_path = explain_img_dir / f"slide_{slide_idx:03d}.png"
+                        audio_path = explain_audio_dir / f"slide_{slide_idx:03d}.mp3"
+                        clip_path = explain_clips_dir / f"clip_{slide_idx:03d}.mp4"
 
-                    if success:
-                        file_size_mb = final_video.stat().st_size / (1024 * 1024)
-                        log_output = self.log(f"  ✅ MP4 영상 생성 완료: {final_video.name} ({file_size_mb:.1f}MB)", log_output)
-                        final_video_path = str(final_video)
+                        if not image_path.exists():
+                            log_output = self.log(f"  ⚠️ 슬라이드 {slide_idx} 이미지 없음, 스킵", log_output)
+                            continue
+                        if not audio_path.exists():
+                            log_output = self.log(f"  ⚠️ 슬라이드 {slide_idx} 오디오 없음, 스킵", log_output)
+                            continue
+
+                        clip_ok = renderer.create_slide_clip(
+                            image_path=image_path,
+                            audio_path=audio_path,
+                            duration=ad["duration"],
+                            output_path=clip_path,
+                            fade_in_duration=0.8,
+                            fade_out_duration=0.8
+                        )
+                        if clip_ok:
+                            clip_paths.append(clip_path)
+                            log_output = self.log(f"  🎥 슬라이드 {slide_idx} 클립 생성 ({ad['duration']:.1f}초)", log_output)
+                        else:
+                            log_output = self.log(f"  ❌ 슬라이드 {slide_idx} 클립 생성 실패", log_output)
+
+                        render_pct = 0.15 + analysis_weight + tts_weight + ((j + 1) / len(audio_durations)) * render_weight
+                        progress(render_pct, desc=f"클립 렌더링 {j+1}/{len(audio_durations)}")
+                        yield out(log_output, "\n\n---\n\n".join(all_explanations), scripts_formatted, final_audio_path)
+
+                    # 클립들을 하나로 합치기
+                    final_video = config.OUTPUT_DIR / "ppt_explanation.mp4"
+                    if clip_paths:
+                        log_output = self.log(f"  🔗 {len(clip_paths)}개 클립 연결 중...", log_output)
+                        yield out(log_output, "\n\n---\n\n".join(all_explanations), scripts_formatted, final_audio_path)
+
+                        success = renderer.concatenate_clips(clip_paths, final_video)
+                        if success and final_video.exists():
+                            file_size_mb = final_video.stat().st_size / (1024 * 1024)
+                            log_output = self.log(f"  ✅ MP4 영상 생성 완료: {final_video.name} ({file_size_mb:.1f}MB)", log_output)
+                            final_video_path = str(final_video)
+                        else:
+                            log_output = self.log("  ❌ MP4 클립 연결 실패", log_output)
                     else:
-                        log_output = self.log("  ❌ MP4 영상 렌더링 실패", log_output)
+                        log_output = self.log("  ❌ 생성된 클립이 없어 MP4를 만들 수 없습니다", log_output)
 
             # 완료
             progress(1.0, desc="완료!")
