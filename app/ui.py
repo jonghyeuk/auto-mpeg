@@ -1287,9 +1287,10 @@ class GradioUI:
             raise RuntimeError(f"ElevenLabs TTS 실패 (HTTP {response.status_code}): {response.text}")
 
     def _clean_text_for_tts(self, text):
-        """마크다운 기호를 제거하여 TTS용 텍스트 생성"""
+        """마크다운 기호를 제거하여 TTS용 순수 텍스트 생성"""
         import re
-        tts_text = re.sub(r'#{1,6}\s*', '', text)  # 헤더 제거
+        tts_text = re.sub(r'【[^】]*】\n?', '', text)  # 【슬라이드 N】 헤더 제거
+        tts_text = re.sub(r'#{1,6}\s*', '', tts_text)  # 마크다운 헤더 제거
         tts_text = re.sub(r'\*\*\[([^\]]+)\]\*\*', r'\1:', tts_text)  # **[배경]** → 배경:
         tts_text = re.sub(r'\*\*([^*]+)\*\*', r'\1', tts_text)  # **bold** → bold
         tts_text = re.sub(r'---', '', tts_text)  # 구분선 제거
@@ -1315,18 +1316,19 @@ class GradioUI:
         self,
         pptx_file,
         additional_instructions,
-        enable_tts,
+        tts_provider,
         progress=gr.Progress()
     ):
         """
-        PPT 설명 모드: PPTX를 업로드하면 각 슬라이드의 배경과 콘텐츠를 구분하여 설명
-        TTS 활성화 시 음성 생성 + 슬라이드 이미지와 합쳐 MP4 영상까지 생성
+        PPT 나레이션 모드: PPTX를 업로드하면 나레이션 대본 생성 + TTS + MP4 영상 생성
 
         Args:
             pptx_file: 업로드된 PPTX/PDF 파일
-            additional_instructions: 사용자가 입력한 부가 지시사항 (빈 문자열이면 디폴트)
-            enable_tts: ElevenLabs TTS 음성 생성 활성화 여부
+            additional_instructions: 사용자가 입력한 부가 지시사항
+            tts_provider: TTS 엔진 ("없음 (대본만)", "OpenAI TTS", "ElevenLabs TTS")
         """
+        enable_tts = tts_provider and "없음" not in tts_provider
+        use_openai_tts = tts_provider and "OpenAI" in tts_provider
         log_output = ""
         # 5개 출력: log, 분석결과, 대본, 오디오, 비디오
         def out(log, result="", scripts="", audio=None, video=None):
@@ -1445,39 +1447,25 @@ class GradioUI:
 
 """
 
-                explanation_prompt = f"""당신은 프레젠테이션 슬라이드의 **내용(콘텐츠)**을 설명하는 전문 나레이터입니다.
-슬라이드에 적힌 텍스트와 정보를 중심으로, 청중에게 발표하듯이 자연스럽게 설명해주세요.
+                explanation_prompt = f"""당신은 강의 영상의 나레이터입니다.
+아래 슬라이드 내용을 보고, **강사가 학생들에게 발표하듯** 자연스러운 나레이션 대본을 작성하세요.
 
-{user_instruction_block}## 설명 방식
+{user_instruction_block}## 규칙
 
-⚡ **텍스트/문자 내용에 집중**하여 설명하세요. 배경 디자인이나 시각적 꾸밈은 설명하지 마세요.
-⚡ 발표자가 청중 앞에서 말하는 것처럼 **자연스러운 구어체**로 작성하세요.
-⚡ TTS(음성 합성)로 읽힐 텍스트이므로, 듣기 편한 문장으로 작성하세요.
+1. **반드시 구어체**로 작성하세요. "~합니다", "~인데요", "~거든요" 등 말하는 투로.
+2. 슬라이드의 **텍스트 내용과 의미**만 설명하세요.
+3. 배경 색상, 레이아웃, 디자인, 아이콘 등 **시각적 요소는 절대 언급하지 마세요**.
+4. **[내용 설명]**, **[핵심 포인트]** 같은 헤더/라벨을 붙이지 마세요.
+5. 마크다운(**, ##, - 등)을 사용하지 마세요. 순수 텍스트만 출력하세요.
+6. TTS로 읽힐 대본이므로, 듣기 자연스러운 문장으로 작성하세요.
+7. 15~25초 분량 (한국어 기준 60~100자)으로 작성하세요.
 
-### 설명해야 할 것:
-- 슬라이드의 **제목과 핵심 메시지**를 먼저 언급
-- **본문 텍스트**의 내용을 풀어서 설명
-- 도표, 차트, 다이어그램이 있다면 **데이터의 의미**를 해석
-- 수치나 통계가 있다면 **핵심 포인트** 강조
-- 이미지/사진이 있다면 **무엇을 보여주는지** 간단히 설명
-
-### 설명하지 말 것:
-- 배경 색상, 그라데이션, 패턴 등 디자인 요소
-- 레이아웃 구조나 텍스트 위치
-- 아이콘, 구분선, 도형 등 장식적 요소
-
-【슬라이드 텍스트 정보 (참고용)】
+【슬라이드 정보】
 제목: {slide.get('title', '(없음)')}
 본문: {slide.get('body', '(없음)')}
 {f"발표자 노트: {slide.get('notes', '')}" if slide.get('notes') else ''}
 
-【출력 형식】
-**[내용 설명]**
-(슬라이드 내용을 발표하듯 자연스럽게 설명)
-
-**[핵심 포인트]**
-(이 슬라이드가 전달하려는 핵심 메시지 1-2문장)
-"""
+위 내용을 바탕으로, 나레이션 대본만 출력하세요. 다른 설명이나 주석은 붙이지 마세요."""
 
                 # 이미지가 있으면 Vision API로 전송
                 messages_content = []
@@ -1515,9 +1503,12 @@ class GradioUI:
 
                     explanation = message.content[0].text.strip()
 
-                    slide_header = f"## 슬라이드 {slide_num}: {slide.get('title', '제목 없음')}"
-                    full_explanation = f"{slide_header}\n\n{explanation}"
+                    slide_header = f"【슬라이드 {slide_num}: {slide.get('title', '제목 없음')}】"
+                    full_explanation = f"{slide_header}\n{explanation}"
                     all_explanations.append(full_explanation)
+
+                    # 나레이션 대본은 항상 수집 (TTS 여부와 무관)
+                    tts_scripts.append(f"【슬라이드 {slide_num}】\n{explanation}")
 
                     log_output = self.log(f"  ✅ 슬라이드 {slide_num} 분석 완료 ({len(explanation)}자)", log_output)
 
@@ -1526,19 +1517,34 @@ class GradioUI:
                     all_explanations.append(error_msg)
                     log_output = self.log(f"  ❌ 슬라이드 {slide_num} 분석 실패: {str(e)}", log_output)
 
-                yield out(log_output, "\n\n---\n\n".join(all_explanations))
+                # 실시간으로 대본도 표시
+                scripts_formatted = "\n\n━━━━━━━━━━━━━━━━━━━━\n\n".join(tts_scripts)
+                yield out(log_output, "\n\n---\n\n".join(all_explanations), scripts_formatted)
 
-            # STEP 3: ElevenLabs TTS 음성 생성 (활성화된 경우)
+            # 나레이션 대본은 항상 포맷팅
+            scripts_formatted = "\n\n━━━━━━━━━━━━━━━━━━━━\n\n".join(tts_scripts)
+
+            # STEP 3: TTS 음성 생성 (활성화된 경우)
             final_audio_path = None
             final_video_path = None
-            scripts_formatted = ""
 
             if enable_tts:
+                tts_engine_name = "OpenAI" if use_openai_tts else "ElevenLabs"
                 log_output = self.log("", log_output)
                 log_output = self.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", log_output)
-                log_output = self.log("🔊 STEP 3: ElevenLabs TTS 음성 생성", log_output)
+                log_output = self.log(f"🔊 STEP 3: {tts_engine_name} TTS 음성 생성", log_output)
                 log_output = self.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", log_output)
-                yield out(log_output, "\n\n---\n\n".join(all_explanations))
+                yield out(log_output, "\n\n---\n\n".join(all_explanations), scripts_formatted)
+
+                # OpenAI TTS 클라이언트 초기화
+                openai_tts_client = None
+                if use_openai_tts:
+                    from app.modules.tts_client import TTSClient
+                    openai_tts_client = TTSClient(
+                        provider="openai",
+                        api_key=config.OPENAI_API_KEY,
+                        voice=config.TTS_VOICE
+                    )
 
                 for i, explanation_text in enumerate(all_explanations):
                     slide_num = i + 1
@@ -1546,16 +1552,19 @@ class GradioUI:
                     progress_pct = 0.15 + analysis_weight + (i / len(all_explanations)) * tts_weight
                     progress(progress_pct, desc=f"TTS 생성 중... ({slide_num}/{len(all_explanations)})")
 
-                    # 마크다운 기호 제거하여 읽기용 텍스트 생성
+                    # 나레이션 텍스트 (이미 순수 텍스트이므로 헤더만 제거)
                     tts_text = self._clean_text_for_tts(explanation_text)
-                    tts_scripts.append(f"【슬라이드 {slide_num}】\n{tts_text}")
 
                     # 렌더러가 인식하는 파일명 형식으로 저장
                     audio_path = explain_audio_dir / f"slide_{slide_index:03d}.mp3"
 
                     try:
-                        self._generate_elevenlabs_tts(tts_text, audio_path)
-                        duration = self._get_audio_duration(audio_path)
+                        if use_openai_tts:
+                            duration = openai_tts_client.text_to_speech_openai(tts_text, audio_path)
+                        else:
+                            self._generate_elevenlabs_tts(tts_text, audio_path)
+                            duration = self._get_audio_duration(audio_path)
+
                         audio_files.append(str(audio_path))
                         audio_durations.append({
                             "index": slide_index,
@@ -1563,11 +1572,10 @@ class GradioUI:
                             "duration": duration,
                             "script": tts_text
                         })
-                        log_output = self.log(f"  🔊 슬라이드 {slide_num} TTS 생성 완료 ({duration:.1f}초)", log_output)
+                        log_output = self.log(f"  🔊 슬라이드 {slide_num} TTS 완료 ({duration:.1f}초)", log_output)
                     except Exception as e:
                         log_output = self.log(f"  ❌ 슬라이드 {slide_num} TTS 실패: {str(e)}", log_output)
 
-                    scripts_formatted = "\n\n━━━━━━━━━━━━━━━━━━━━\n\n".join(tts_scripts)
                     yield out(log_output, "\n\n---\n\n".join(all_explanations), scripts_formatted)
 
                 # 모든 오디오 파일을 하나로 합쳐서 MP3 제공
@@ -1657,7 +1665,7 @@ class GradioUI:
             progress(1.0, desc="완료!")
             log_output = self.log("", log_output)
             log_output = self.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", log_output)
-            log_output = self.log(f"🎉 전체 {len(slides)}개 슬라이드 분석 완료!", log_output)
+            log_output = self.log(f"🎉 전체 {len(slides)}개 슬라이드 나레이션 대본 생성 완료!", log_output)
             if enable_tts and audio_files:
                 log_output = self.log(f"🔊 음성 파일 {len(audio_files)}개 생성 완료!", log_output)
             if final_video_path:
@@ -4051,13 +4059,13 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 with gr.Tab("📖 PPT 설명 모드"):
                     gr.Markdown(
                         """
-                        ### PPT → AI 슬라이드 설명
+                        ### PPT → AI 나레이션 영상 생성
 
-                        **PPTX/PDF 파일**을 업로드하면 각 슬라이드의 **배경(디자인)**과 **콘텐츠(내용)**를
-                        구분하여 AI가 상세히 설명합니다.
+                        **PPTX/PDF 파일**을 업로드하면 각 슬라이드의 **내용을 발표하듯 나레이션 대본**을 생성하고,
+                        **TTS 음성 + 슬라이드 이미지 → MP4 영상**까지 자동 생성합니다.
 
-                        - **배경**: 색상, 레이아웃, 디자인 요소
-                        - **콘텐츠**: 텍스트, 도표, 이미지의 의미와 핵심 메시지
+                        - **나레이션 대본**: 슬라이드 내용을 강의하듯 자연스러운 말투로 변환
+                        - **MP4 영상**: 슬라이드 이미지 + AI 음성 합성 영상
 
                         부가 지시사항을 입력하면 설명 방식을 커스터마이즈할 수 있습니다.
                         """
@@ -4081,13 +4089,14 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                                 info="AI에게 추가로 전달할 지시사항 (비워두면 기본 스타일로 설명)"
                             )
 
-                            explain_tts_enabled = gr.Checkbox(
-                                label="ElevenLabs TTS 음성 생성",
-                                value=False,
-                                info="설명 내용을 ElevenLabs TTS로 음성 변환 (.env에 ELEVENLABS_API_KEY 필요)"
+                            explain_tts_provider = gr.Radio(
+                                label="TTS 음성 엔진",
+                                choices=["없음 (대본만)", "OpenAI TTS", "ElevenLabs TTS"],
+                                value="OpenAI TTS",
+                                info="음성 생성 엔진 선택 (OpenAI: OPENAI_API_KEY, ElevenLabs: ELEVENLABS_API_KEY)"
                             )
 
-                            explain_btn = gr.Button("🔍 슬라이드 분석 시작", variant="primary", size="lg")
+                            explain_btn = gr.Button("🎬 나레이션 영상 생성", variant="primary", size="lg")
 
                         with gr.Column(scale=2):
                             explain_log = gr.Textbox(
@@ -4098,21 +4107,21 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                             )
 
                             explain_result = gr.Textbox(
-                                label="📝 슬라이드 분석 결과",
+                                label="📝 나레이션 대본 (전체)",
                                 lines=20,
                                 max_lines=40,
                                 show_copy_button=True,
                                 interactive=False,
-                                placeholder="PPT를 업로드하고 '슬라이드 분석 시작' 버튼을 클릭하면 여기에 결과가 표시됩니다..."
+                                placeholder="PPT를 업로드하고 '나레이션 영상 생성' 버튼을 클릭하면 여기에 대본이 표시됩니다..."
                             )
 
                             explain_scripts = gr.Textbox(
-                                label="🎙️ TTS 대본 (각 슬라이드별 나레이션)",
+                                label="🎙️ TTS 대본 (음성으로 변환될 텍스트)",
                                 lines=15,
                                 max_lines=40,
                                 show_copy_button=True,
                                 interactive=False,
-                                placeholder="TTS 활성화 시 각 슬라이드별 나레이션 대본이 여기에 표시됩니다..."
+                                placeholder="각 슬라이드별 나레이션 대본이 실시간으로 여기에 표시됩니다..."
                             )
 
                             explain_audio_output = gr.Audio(
@@ -4127,7 +4136,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
                     explain_btn.click(
                         fn=self.process_pptx_explanation,
-                        inputs=[explain_pptx_input, explain_instructions, explain_tts_enabled],
+                        inputs=[explain_pptx_input, explain_instructions, explain_tts_provider],
                         outputs=[explain_log, explain_result, explain_scripts, explain_audio_output, explain_video_output]
                     )
 
