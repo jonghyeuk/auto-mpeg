@@ -1447,6 +1447,15 @@ class GradioUI:
 
 """
 
+                # 첫 슬라이드 vs 이후 슬라이드 구분
+                is_first_slide = (i == 0)
+                continuity_instruction = ""
+                if is_first_slide:
+                    continuity_instruction = """8. 첫 번째 슬라이드이므로, "오늘은~", "Today~" 같은 도입부로 시작해도 좋습니다."""
+                else:
+                    continuity_instruction = """8. 이것은 하나의 연속 강의 영상의 중간 부분입니다. "오늘은~", "Today~" 같은 도입부를 쓰지 마세요.
+   바로 내용을 설명하세요. 예: "다음으로 살펴볼 것은~", "이번에는~", "Now let's look at~" 등으로 자연스럽게 이어가세요."""
+
                 explanation_prompt = f"""당신은 강의 영상의 나레이터입니다.
 아래 슬라이드 내용을 보고, **강사가 학생들에게 발표하듯** 자연스러운 나레이션 대본을 작성하세요.
 
@@ -1459,8 +1468,9 @@ class GradioUI:
 5. 마크다운(**, ##, - 등)을 사용하지 마세요. 순수 텍스트만 출력하세요.
 6. TTS로 읽힐 대본이므로, 듣기 자연스러운 문장으로 작성하세요.
 7. 15~25초 분량 (한국어 기준 60~100자)으로 작성하세요.
+{continuity_instruction}
 
-【슬라이드 정보】
+【슬라이드 정보 ({slide_num}/{len(slides)})】
 제목: {slide.get('title', '(없음)')}
 본문: {slide.get('body', '(없음)')}
 {f"발표자 노트: {slide.get('notes', '')}" if slide.get('notes') else ''}
@@ -1653,7 +1663,9 @@ class GradioUI:
                             image_path=image_path,
                             audio_path=audio_path,
                             duration=ad["duration"],
-                            output_path=clip_path
+                            output_path=clip_path,
+                            fade_in_duration=0.8,
+                            fade_out_duration=0.8
                         )
                         if clip_ok:
                             clip_paths.append(clip_path)
