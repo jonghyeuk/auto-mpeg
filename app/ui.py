@@ -1239,6 +1239,209 @@ class GradioUI:
             yield log_output, None
 
     # ============================================================
+    # PPT 설명 모드 함수들
+    # ============================================================
+
+    def process_pptx_explanation(
+        self,
+        pptx_file,
+        additional_instructions,
+        progress=gr.Progress()
+    ):
+        """
+        PPT 설명 모드: PPTX를 업로드하면 각 슬라이드의 배경과 콘텐츠를 구분하여 설명
+
+        Args:
+            pptx_file: 업로드된 PPTX/PDF 파일
+            additional_instructions: 사용자가 입력한 부가 지시사항 (빈 문자열이면 디폴트)
+        """
+        log_output = ""
+
+        try:
+            if pptx_file is None:
+                log_output = self.log("❌ PPT/PDF 파일을 업로드해주세요.", log_output)
+                yield log_output, ""
+                return
+
+            # 의존성 체크
+            log_output = self.log("🔍 시스템 의존성 체크 중...", log_output)
+            yield log_output, ""
+
+            progress(0.05, desc="PPT 파싱 중...")
+            log_output = self.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", log_output)
+            log_output = self.log("📂 STEP 1: PPT 파싱 및 이미지 변환", log_output)
+            log_output = self.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", log_output)
+            yield log_output, ""
+
+            pptx_path = Path(pptx_file.name if hasattr(pptx_file, 'name') else pptx_file)
+
+            # 설명 모드 전용 임시 디렉토리
+            explain_img_dir = config.TEMP_DIR / "explain_slides_img"
+            explain_img_dir.mkdir(parents=True, exist_ok=True)
+
+            # 기존 파일 정리
+            for f in explain_img_dir.glob("*.png"):
+                f.unlink()
+
+            slides_json = config.META_DIR / "explain_slides.json"
+
+            if pptx_path.suffix.lower() == '.pdf':
+                from app.modules.pdf_parser import PDFParser
+                pdf_parser = PDFParser()
+                slides = pdf_parser.parse(pptx_path, explain_img_dir)
+            else:
+                from app.modules.ppt_parser import PPTParser, convert_pptx_to_images
+                parser = PPTParser(str(pptx_path))
+                slides = parser.parse(slides_json, explain_img_dir)
+                # 이미지 변환 (LibreOffice → PDF → PNG)
+                convert_pptx_to_images(pptx_path, explain_img_dir)
+
+            log_output = self.log(f"📊 총 {len(slides)}개 슬라이드 발견", log_output)
+            yield log_output, ""
+
+            # STEP 2: Claude Vision으로 각 슬라이드 설명 생성
+            progress(0.15, desc="AI 슬라이드 분석 중...")
+            log_output = self.log("", log_output)
+            log_output = self.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", log_output)
+            log_output = self.log("🤖 STEP 2: AI 슬라이드 설명 생성", log_output)
+            log_output = self.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", log_output)
+            yield log_output, ""
+
+            from anthropic import Anthropic
+            import base64
+
+            client = Anthropic(api_key=config.ANTHROPIC_API_KEY)
+
+            all_explanations = []
+
+            for i, slide in enumerate(slides):
+                slide_num = i + 1
+                progress_pct = 0.15 + (i / len(slides)) * 0.8
+                progress(progress_pct, desc=f"슬라이드 {slide_num}/{len(slides)} 분석 중...")
+
+                log_output = self.log("", log_output)
+                log_output = self.log(f"━━━ 슬라이드 {slide_num}/{len(slides)}: {slide.get('title', '제목 없음')} ━━━", log_output)
+
+                # 슬라이드 이미지 찾기
+                slide_image_path = explain_img_dir / f"slide_{slide['index']:03d}.png"
+
+                # 프롬프트 구성
+                user_instruction_block = ""
+                if additional_instructions and additional_instructions.strip():
+                    user_instruction_block = f"""
+⚠️ 【사용자 추가 지시사항 - 반드시 준수】 ⚠️
+다음 지시사항을 설명에 **최우선으로 반영**하세요:
+
+"{additional_instructions.strip()}"
+
+위 지시사항에 맞춰 설명 방식, 초점, 깊이를 조정하세요.
+"""
+
+                explanation_prompt = f"""당신은 프레젠테이션 슬라이드를 분석하는 전문가입니다.
+이 슬라이드를 보고 다음 두 가지를 **명확히 구분**하여 설명해주세요:
+
+## 분석 기준
+
+### 1. 배경 (Background/Design)
+슬라이드의 시각적 디자인 요소를 설명하세요:
+- 배경 색상, 그라데이션, 패턴
+- 레이아웃 구조 (텍스트 위치, 이미지 배치)
+- 사용된 디자인 테마나 템플릿 스타일
+- 장식적 요소 (아이콘, 구분선, 도형 등)
+
+### 2. 콘텐츠 (Content)
+슬라이드에 담긴 **실질적인 정보**를 설명하세요:
+- 제목과 핵심 메시지
+- 본문 텍스트의 내용 요약
+- 도표, 차트, 다이어그램이 있다면 그 의미
+- 이미지/사진이 있다면 무엇을 보여주는지
+- 데이터나 수치가 있다면 핵심 포인트
+
+{user_instruction_block}
+【슬라이드 텍스트 정보 (참고용)】
+제목: {slide.get('title', '(없음)')}
+본문: {slide.get('body', '(없음)')}
+{f"발표자 노트: {slide.get('notes', '')}" if slide.get('notes') else ''}
+
+【출력 형식】
+다음 형식으로 작성하세요:
+
+**[배경]**
+(배경/디자인 설명)
+
+**[콘텐츠]**
+(내용 설명)
+
+**[요약]**
+(이 슬라이드가 전달하려는 핵심 메시지 1-2문장)
+"""
+
+                # 이미지가 있으면 Vision API로 전송
+                messages_content = []
+
+                if slide_image_path.exists():
+                    with open(slide_image_path, "rb") as img_file:
+                        image_data = base64.b64encode(img_file.read()).decode("utf-8")
+
+                    messages_content.append({
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/png",
+                            "data": image_data
+                        }
+                    })
+                    log_output = self.log(f"  🖼️ 슬라이드 이미지 포함하여 분석", log_output)
+                else:
+                    log_output = self.log(f"  ⚠️ 이미지 없음 - 텍스트 기반 분석", log_output)
+
+                messages_content.append({
+                    "type": "text",
+                    "text": explanation_prompt
+                })
+
+                yield log_output, "\n\n".join(all_explanations)
+
+                try:
+                    message = client.messages.create(
+                        model=config.DEFAULT_LLM_MODEL,
+                        max_tokens=2048,
+                        temperature=0.5,
+                        messages=[{"role": "user", "content": messages_content}]
+                    )
+
+                    explanation = message.content[0].text.strip()
+
+                    slide_header = f"## 슬라이드 {slide_num}: {slide.get('title', '제목 없음')}"
+                    full_explanation = f"{slide_header}\n\n{explanation}"
+                    all_explanations.append(full_explanation)
+
+                    log_output = self.log(f"  ✅ 슬라이드 {slide_num} 분석 완료 ({len(explanation)}자)", log_output)
+
+                except Exception as e:
+                    error_msg = f"## 슬라이드 {slide_num}: {slide.get('title', '제목 없음')}\n\n❌ 분석 실패: {str(e)}"
+                    all_explanations.append(error_msg)
+                    log_output = self.log(f"  ❌ 슬라이드 {slide_num} 분석 실패: {str(e)}", log_output)
+
+                yield log_output, "\n\n---\n\n".join(all_explanations)
+
+            # 완료
+            progress(1.0, desc="분석 완료!")
+            log_output = self.log("", log_output)
+            log_output = self.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", log_output)
+            log_output = self.log(f"🎉 전체 {len(slides)}개 슬라이드 분석 완료!", log_output)
+            log_output = self.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", log_output)
+
+            final_result = "\n\n---\n\n".join(all_explanations)
+            yield log_output, final_result
+
+        except Exception as e:
+            log_output = self.log(f"❌ 오류 발생: {str(e)}", log_output)
+            import traceback
+            log_output = self.log(traceback.format_exc(), log_output)
+            yield log_output, ""
+
+    # ============================================================
     # MP4 자막 모드 함수들
     # ============================================================
 
@@ -3611,7 +3814,68 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                     )
 
                 # ============================================================
-                # 탭 3: MP4 호환성 변환
+                # 탭 3: PPT 설명 모드
+                # ============================================================
+                with gr.Tab("📖 PPT 설명 모드"):
+                    gr.Markdown(
+                        """
+                        ### PPT → AI 슬라이드 설명
+
+                        **PPTX/PDF 파일**을 업로드하면 각 슬라이드의 **배경(디자인)**과 **콘텐츠(내용)**를
+                        구분하여 AI가 상세히 설명합니다.
+
+                        - **배경**: 색상, 레이아웃, 디자인 요소
+                        - **콘텐츠**: 텍스트, 도표, 이미지의 의미와 핵심 메시지
+
+                        부가 지시사항을 입력하면 설명 방식을 커스터마이즈할 수 있습니다.
+                        """
+                    )
+
+                    with gr.Row():
+                        with gr.Column(scale=1):
+                            gr.Markdown("### 📤 입력")
+
+                            explain_pptx_input = gr.File(
+                                label="PPT/PDF 파일 업로드",
+                                file_types=[".pptx", ".pdf"],
+                                type="filepath"
+                            )
+
+                            explain_instructions = gr.Textbox(
+                                label="부가 지시사항 (선택)",
+                                placeholder="예: 기술적인 용어를 쉽게 풀어서 설명해줘 / 마케팅 관점에서 분석해줘 / 영어로 설명해줘",
+                                lines=3,
+                                value="",
+                                info="AI에게 추가로 전달할 지시사항 (비워두면 기본 스타일로 설명)"
+                            )
+
+                            explain_btn = gr.Button("🔍 슬라이드 분석 시작", variant="primary", size="lg")
+
+                        with gr.Column(scale=2):
+                            explain_log = gr.Textbox(
+                                label="📋 처리 로그",
+                                lines=10,
+                                max_lines=15,
+                                elem_classes=["output-text"]
+                            )
+
+                            explain_result = gr.Textbox(
+                                label="📝 슬라이드 설명 결과",
+                                lines=25,
+                                max_lines=50,
+                                show_copy_button=True,
+                                interactive=False,
+                                placeholder="PPT를 업로드하고 '슬라이드 분석 시작' 버튼을 클릭하면 여기에 결과가 표시됩니다..."
+                            )
+
+                    explain_btn.click(
+                        fn=self.process_pptx_explanation,
+                        inputs=[explain_pptx_input, explain_instructions],
+                        outputs=[explain_log, explain_result]
+                    )
+
+                # ============================================================
+                # 탭 4: MP4 호환성 변환
                 # ============================================================
                 with gr.Tab("🔄 MP4 호환성 변환"):
                     gr.Markdown(
