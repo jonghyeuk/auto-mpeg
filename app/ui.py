@@ -2495,55 +2495,58 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         - 메인 영상의 codec/fps/pix_fmt/sample_rate/channels에 맞춰 오프닝/클로징 인코딩
         """
         try:
-            # 1) 메인 비디오 정보 probe
-            probe_cmd = [
-                "ffprobe", "-v", "error",
-                "-select_streams", "v:0",
-                "-show_entries", "stream=width,height,r_frame_rate,codec_name,pix_fmt",
-                "-of", "csv=p=0",
-                str(video_path)
-            ]
-            probe_result = subprocess.run(probe_cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
-            if probe_result.returncode != 0:
+            # 1) 메인 비디오 정보 probe (key=value 형식으로 순서 무관 파싱)
+            def probe_kv(stream_selector, entries):
+                cmd = [
+                    "ffprobe", "-v", "error",
+                    "-select_streams", stream_selector,
+                    "-show_entries", f"stream={entries}",
+                    "-of", "default=nw=1",
+                    str(video_path)
+                ]
+                r = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
+                if r.returncode != 0:
+                    return None
+                out = {}
+                for line in r.stdout.strip().splitlines():
+                    if "=" in line:
+                        k, v = line.split("=", 1)
+                        out[k.strip()] = v.strip()
+                return out
+
+            v_info = probe_kv("v:0", "width,height,r_frame_rate,codec_name,pix_fmt")
+            if not v_info or "width" not in v_info:
                 return False, "영상 정보 확인 실패"
 
-            v_parts = probe_result.stdout.strip().split(",")
-            if len(v_parts) < 5:
-                return False, f"영상 정보 파싱 실패: {probe_result.stdout.strip()}"
-            width = int(v_parts[0])
-            height = int(v_parts[1])
-            fps_str = v_parts[2]  # 예: "30000/1001" 그대로 사용
-            video_codec = v_parts[3]
-            pix_fmt = v_parts[4] or "yuv420p"
+            try:
+                width = int(v_info["width"])
+                height = int(v_info["height"])
+            except (KeyError, ValueError) as e:
+                return False, f"영상 해상도 파싱 실패: {e}"
+
+            fps_str = v_info.get("r_frame_rate", "30/1")
+            video_codec = v_info.get("codec_name", "")
+            pix_fmt = v_info.get("pix_fmt", "") or "yuv420p"
 
             # H.264만 지원 (TS bsf 호환성)
             if video_codec != "h264":
                 return False, f"이 모드는 H.264 영상만 지원합니다 (입력 코덱: {video_codec})"
 
             # 메인 오디오 정보 probe
-            audio_probe_cmd = [
-                "ffprobe", "-v", "error",
-                "-select_streams", "a:0",
-                "-show_entries", "stream=sample_rate,channels,codec_name",
-                "-of", "csv=p=0",
-                str(video_path)
-            ]
-            audio_probe = subprocess.run(audio_probe_cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
+            a_info = probe_kv("a:0", "sample_rate,channels,codec_name") or {}
 
             has_audio = False
             sample_rate = 48000
             channels = 2
             audio_codec = "aac"
-            if audio_probe.returncode == 0 and audio_probe.stdout.strip():
-                a_parts = audio_probe.stdout.strip().split(",")
-                if len(a_parts) >= 3:
-                    try:
-                        sample_rate = int(a_parts[0])
-                        channels = int(a_parts[1])
-                        audio_codec = a_parts[2]
-                        has_audio = True
-                    except Exception:
-                        pass
+            if a_info:
+                try:
+                    sample_rate = int(a_info.get("sample_rate", sample_rate))
+                    channels = int(a_info.get("channels", channels))
+                    audio_codec = a_info.get("codec_name", audio_codec)
+                    has_audio = bool(a_info.get("codec_name"))
+                except Exception:
+                    pass
 
             if has_audio and audio_codec != "aac":
                 return False, f"이 모드는 AAC 오디오만 지원합니다 (입력 오디오: {audio_codec})"
