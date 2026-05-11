@@ -2483,6 +2483,162 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         else:
             return False, result.stderr[:200]
 
+    def concat_with_opening_closing_preserve_main(self, video_path, output_path,
+                                                    opening_image=None, closing_image=None,
+                                                    opening_duration=3, closing_duration=3,
+                                                    fade_duration=1):
+        """메인 영상을 재인코딩하지 않고 앞뒤에 오프닝/클로징 추가.
+
+        - 오프닝: 끝부분 페이드 아웃만
+        - 클로징: 시작부분 페이드 인만
+        - 메인 영상: 손대지 않음 (TS intermediate + concat protocol + stream copy)
+        - 메인 영상의 codec/fps/pix_fmt/sample_rate/channels에 맞춰 오프닝/클로징 인코딩
+        """
+        try:
+            # 1) 메인 비디오 정보 probe
+            probe_cmd = [
+                "ffprobe", "-v", "error",
+                "-select_streams", "v:0",
+                "-show_entries", "stream=width,height,r_frame_rate,codec_name,pix_fmt",
+                "-of", "csv=p=0",
+                str(video_path)
+            ]
+            probe_result = subprocess.run(probe_cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
+            if probe_result.returncode != 0:
+                return False, "영상 정보 확인 실패"
+
+            v_parts = probe_result.stdout.strip().split(",")
+            if len(v_parts) < 5:
+                return False, f"영상 정보 파싱 실패: {probe_result.stdout.strip()}"
+            width = int(v_parts[0])
+            height = int(v_parts[1])
+            fps_str = v_parts[2]  # 예: "30000/1001" 그대로 사용
+            video_codec = v_parts[3]
+            pix_fmt = v_parts[4] or "yuv420p"
+
+            # H.264만 지원 (TS bsf 호환성)
+            if video_codec != "h264":
+                return False, f"이 모드는 H.264 영상만 지원합니다 (입력 코덱: {video_codec})"
+
+            # 메인 오디오 정보 probe
+            audio_probe_cmd = [
+                "ffprobe", "-v", "error",
+                "-select_streams", "a:0",
+                "-show_entries", "stream=sample_rate,channels,codec_name",
+                "-of", "csv=p=0",
+                str(video_path)
+            ]
+            audio_probe = subprocess.run(audio_probe_cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
+
+            has_audio = False
+            sample_rate = 48000
+            channels = 2
+            audio_codec = "aac"
+            if audio_probe.returncode == 0 and audio_probe.stdout.strip():
+                a_parts = audio_probe.stdout.strip().split(",")
+                if len(a_parts) >= 3:
+                    try:
+                        sample_rate = int(a_parts[0])
+                        channels = int(a_parts[1])
+                        audio_codec = a_parts[2]
+                        has_audio = True
+                    except Exception:
+                        pass
+
+            if has_audio and audio_codec != "aac":
+                return False, f"이 모드는 AAC 오디오만 지원합니다 (입력 오디오: {audio_codec})"
+
+            channel_layout = "stereo" if channels >= 2 else "mono"
+            temp_dir = Path(video_path).parent
+
+            # 2) 오프닝/클로징을 메인 스펙에 맞춰 인코딩
+            def encode_clip(image_path, out_mp4, duration, fade_mode):
+                """fade_mode: 'out' (오프닝) | 'in' (클로징) | None"""
+                vf_filters = [
+                    f"scale={width}:{height}:force_original_aspect_ratio=decrease",
+                    f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2",
+                    "setsar=1",
+                ]
+                if fade_mode == "out" and fade_duration > 0 and duration > fade_duration:
+                    vf_filters.append(f"fade=t=out:st={duration-fade_duration}:d={fade_duration}")
+                elif fade_mode == "in" and fade_duration > 0 and duration > fade_duration:
+                    vf_filters.append(f"fade=t=in:st=0:d={fade_duration}")
+
+                cmd = ["ffmpeg", "-y", "-loop", "1", "-i", str(image_path)]
+                if has_audio:
+                    cmd += ["-f", "lavfi", "-i",
+                            f"anullsrc=channel_layout={channel_layout}:sample_rate={sample_rate}"]
+                cmd += [
+                    "-t", str(duration),
+                    "-vf", ",".join(vf_filters),
+                    "-r", fps_str,
+                    "-pix_fmt", pix_fmt,
+                    "-c:v", "libx264", "-profile:v", "high", "-preset", "fast", "-crf", "18",
+                ]
+                if has_audio:
+                    cmd += ["-c:a", "aac", "-b:a", "192k",
+                            "-ar", str(sample_rate), "-ac", str(channels)]
+                cmd += ["-shortest", str(out_mp4)]
+                return subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
+
+            segments = []  # [(label, path_to_mp4)]
+
+            if opening_image:
+                opening_mp4 = temp_dir / "opening_match.mp4"
+                r = encode_clip(opening_image, opening_mp4, opening_duration, "out")
+                if r.returncode != 0:
+                    return False, f"오프닝 인코딩 실패: {r.stderr[-400:]}"
+                segments.append(("opening", opening_mp4))
+
+            segments.append(("main", Path(video_path)))
+
+            if closing_image:
+                closing_mp4 = temp_dir / "closing_match.mp4"
+                r = encode_clip(closing_image, closing_mp4, closing_duration, "in")
+                if r.returncode != 0:
+                    return False, f"클로징 인코딩 실패: {r.stderr[-400:]}"
+                segments.append(("closing", closing_mp4))
+
+            if len(segments) == 1:
+                shutil.copy(str(video_path), str(output_path))
+                return True, "오프닝/클로징 없음, 원본 복사"
+
+            # 3) 각 세그먼트를 TS로 변환 (stream copy, 메인 영상도 비트 단위 보존)
+            ts_files = []
+            for name, path in segments:
+                ts_path = temp_dir / f"{name}_segment.ts"
+                cmd = [
+                    "ffmpeg", "-y",
+                    "-i", str(path),
+                    "-c", "copy",
+                    "-bsf:v", "h264_mp4toannexb",
+                    "-f", "mpegts",
+                    str(ts_path)
+                ]
+                r = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
+                if r.returncode != 0:
+                    return False, f"{name} TS 변환 실패: {r.stderr[-400:]}"
+                ts_files.append(str(ts_path))
+
+            # 4) concat protocol + stream copy → 최종 mp4
+            concat_input = "concat:" + "|".join(ts_files)
+            cmd = [
+                "ffmpeg", "-y",
+                "-i", concat_input,
+                "-c", "copy",
+            ]
+            if has_audio:
+                cmd += ["-bsf:a", "aac_adtstoasc"]
+            cmd += ["-movflags", "+faststart", str(output_path)]
+            r = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
+            if r.returncode != 0:
+                return False, f"concat 실패: {r.stderr[-400:]}"
+
+            return True, "성공 (메인 영상 비트 보존)"
+
+        except Exception as e:
+            return False, str(e)
+
     def process_opening_closing_only(self, input_file, opening_image, closing_image,
                                       duration_preset="오프닝 3초 / 클로징 3초",
                                       progress=gr.Progress()):
@@ -2546,7 +2702,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             progress(0.3, desc="오프닝/클로징 합성 중...")
             yield log_output, None
 
-            success, msg = self.add_opening_closing(
+            success, msg = self.concat_with_opening_closing_preserve_main(
                 working_video,
                 output_path,
                 opening_image,
@@ -2558,8 +2714,11 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
             if not success:
                 log_output = self.log(f"❌ 합성 실패: {msg}", log_output)
+                log_output = self.log("  (입력 영상이 H.264/AAC가 아니거나 호환되지 않는 형식일 수 있습니다)", log_output)
                 yield log_output, None
                 return
+
+            log_output = self.log(f"  ℹ️ {msg}", log_output)
 
             progress(1.0, desc="완료")
             log_output = self.log("", log_output)
@@ -4307,10 +4466,12 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                         ### 오프닝/클로징만 합성
 
                         **기존 영상**에 오프닝/클로징 이미지를 앞뒤로 붙입니다.
-                        (Whisper 음성 인식, 자막 합성, 크롭, 업스케일 등은 수행하지 않습니다)
+                        **메인 영상은 재인코딩 없이 비트 단위로 보존됩니다** (속도/자막 싱크 변동 없음).
 
-                        - 페이드 인/아웃 효과 자동 적용
+                        - 페이드는 오프닝(끝) / 클로징(처음)에만 적용, 메인 영상은 손대지 않음
                         - 오프닝 또는 클로징 중 하나만 넣어도 됩니다
+                        - **입력 영상은 H.264 + AAC 코덱이어야 합니다** (대부분의 mp4는 이 형식)
+                        - 그 외 코덱은 먼저 "🔄 MP4 호환성 변환" 탭으로 변환 후 사용하세요
                         """
                     )
 
