@@ -2483,6 +2483,99 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         else:
             return False, result.stderr[:200]
 
+    def process_opening_closing_only(self, input_file, opening_image, closing_image,
+                                      duration_preset="오프닝 3초 / 클로징 3초",
+                                      progress=gr.Progress()):
+        """
+        오프닝/클로징만 합성하는 단독 처리 (자막/STT 없이)
+        """
+        log_output = ""
+        log_output = self.log("=" * 50, log_output)
+        log_output = self.log("🎬 오프닝/클로징 합성 시작", log_output)
+        log_output = self.log("=" * 50, log_output)
+
+        try:
+            if not input_file:
+                log_output = self.log("❌ 영상 파일을 업로드해주세요.", log_output)
+                yield log_output, None
+                return
+
+            if not opening_image and not closing_image:
+                log_output = self.log("❌ 오프닝 또는 클로징 이미지 중 하나는 필수입니다.", log_output)
+                yield log_output, None
+                return
+
+            input_path = Path(input_file)
+            if not input_path.exists():
+                log_output = self.log(f"❌ 파일을 찾을 수 없습니다: {input_file}", log_output)
+                yield log_output, None
+                return
+
+            log_output = self.log(f"📥 입력 영상: {input_path.name}", log_output)
+            if opening_image:
+                log_output = self.log(f"  📸 오프닝: {Path(opening_image).name}", log_output)
+            if closing_image:
+                log_output = self.log(f"  📸 클로징: {Path(closing_image).name}", log_output)
+
+            duration_map = {
+                "오프닝 3초 / 클로징 3초": (3, 3),
+                "오프닝 5초 / 클로징 5초": (5, 5),
+                "오프닝 3초 / 클로징 12초": (3, 12),
+                "오프닝 5초 / 클로징 65초": (5, 65),
+            }
+            opening_dur, closing_dur = duration_map.get(duration_preset, (3, 3))
+            log_output = self.log(f"  📍 오프닝 {opening_dur}초 / 클로징 {closing_dur}초", log_output)
+            yield log_output, None
+
+            progress(0.1, desc="작업 디렉토리 준비 중...")
+            temp_dir = config.TEMP_DIR / "openclose_only"
+            temp_dir.mkdir(parents=True, exist_ok=True)
+
+            # 입력 영상을 temp_dir로 복사 (add_opening_closing이 같은 폴더에 임시 파일 생성)
+            working_video = temp_dir / f"input_{input_path.stem}.mp4"
+            shutil.copy(str(input_path), str(working_video))
+
+            import time
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            output_path = config.OUTPUT_DIR / f"openclose_{timestamp}.mp4"
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+
+            log_output = self.log("", log_output)
+            log_output = self.log("🎬 오프닝/클로징 합성 중...", log_output)
+            log_output = self.log("  (영상 길이에 따라 시간이 걸립니다)", log_output)
+            progress(0.3, desc="오프닝/클로징 합성 중...")
+            yield log_output, None
+
+            success, msg = self.add_opening_closing(
+                working_video,
+                output_path,
+                opening_image,
+                closing_image,
+                opening_duration=opening_dur,
+                closing_duration=closing_dur,
+                fade_duration=1
+            )
+
+            if not success:
+                log_output = self.log(f"❌ 합성 실패: {msg}", log_output)
+                yield log_output, None
+                return
+
+            progress(1.0, desc="완료")
+            log_output = self.log("", log_output)
+            log_output = self.log("=" * 50, log_output)
+            log_output = self.log("✅ 완료!", log_output)
+            log_output = self.log(f"📁 출력: {output_path}", log_output)
+            log_output = self.log("=" * 50, log_output)
+
+            yield log_output, str(output_path)
+
+        except Exception as e:
+            log_output = self.log(f"❌ 오류: {str(e)}", log_output)
+            import traceback
+            traceback.print_exc()
+            yield log_output, None
+
     def process_subtitle_mode_step1(self, input_file, progress=gr.Progress()):
         """
         자막 모드 Step 1: 음성 추출 → STT → 맞춤법 교정
@@ -4206,6 +4299,62 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                         fn=self.convert_to_compatible_mp4,
                         inputs=[mp4_input],
                         outputs=[mp4_progress, mp4_output]
+                    )
+
+                with gr.Tab("🎞️ 오프닝/클로징만"):
+                    gr.Markdown(
+                        """
+                        ### 오프닝/클로징만 합성
+
+                        **기존 영상**에 오프닝/클로징 이미지를 앞뒤로 붙입니다.
+                        (Whisper 음성 인식, 자막 합성, 크롭, 업스케일 등은 수행하지 않습니다)
+
+                        - 페이드 인/아웃 효과 자동 적용
+                        - 오프닝 또는 클로징 중 하나만 넣어도 됩니다
+                        """
+                    )
+
+                    with gr.Row():
+                        with gr.Column(scale=1):
+                            oc_input_video = gr.File(
+                                label="입력 영상 (MP4)",
+                                file_types=[".mp4", ".avi", ".mov", ".mkv"],
+                                type="filepath"
+                            )
+                            oc_opening_image = gr.Image(
+                                label="오프닝 이미지 (선택)",
+                                type="filepath",
+                                sources=["upload"]
+                            )
+                            oc_closing_image = gr.Image(
+                                label="클로징 이미지 (선택)",
+                                type="filepath",
+                                sources=["upload"]
+                            )
+                            oc_duration_preset = gr.Radio(
+                                label="길이 프리셋",
+                                choices=[
+                                    "오프닝 3초 / 클로징 3초",
+                                    "오프닝 5초 / 클로징 5초",
+                                    "오프닝 3초 / 클로징 12초",
+                                    "오프닝 5초 / 클로징 65초",
+                                ],
+                                value="오프닝 3초 / 클로징 3초"
+                            )
+                            oc_run_btn = gr.Button("🎬 오프닝/클로징 합성", variant="primary", size="lg")
+
+                        with gr.Column(scale=1):
+                            oc_log = gr.Textbox(
+                                label="진행 로그",
+                                lines=15,
+                                max_lines=25
+                            )
+                            oc_output = gr.Video(label="결과 영상")
+
+                    oc_run_btn.click(
+                        fn=self.process_opening_closing_only,
+                        inputs=[oc_input_video, oc_opening_image, oc_closing_image, oc_duration_preset],
+                        outputs=[oc_log, oc_output]
                     )
 
             # ============================================================
